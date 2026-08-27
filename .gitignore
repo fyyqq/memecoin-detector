@@ -1,17 +1,16 @@
 # OS
 .DS_Store
 
-# Environment
+# Environment files (never commit real secrets)
 .env
 .env.*
 !.env.example
 
-# Laravel
+# Laravel (structure & nested .gitignore files are kept by Laravel itself)
 /backend/vendor/
 /backend/storage/*.key
-/backend/storage/app/
-/backend/storage/framework/
-/backend/storage/logs/
+/backend/.phpunit.result.cache
+/backend/.phpunit.cache/
 
 # React / Node
 /frontend/node_modules/
