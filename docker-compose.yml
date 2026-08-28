@@ -1,3 +1,30 @@
+# Shared backend runtime configuration.
+#
+# The HTTP API (`backend`) and the ingestion scheduler (`scheduler`) run the same
+# Laravel image and the same environment — declared once here so DB credentials
+# are never duplicated. They differ only in the process they run:
+#   backend   -> php artisan serve   (HTTP API, port 8010)
+#   scheduler -> php artisan schedule:work   (runs memecoins:discover every 10 min)
+x-backend-build: &backend-build
+  context: .
+  dockerfile: docker/backend/Dockerfile
+
+x-backend-env: &backend-env
+  DB_CONNECTION: pgsql
+  DB_HOST: postgres
+  DB_PORT: "5432"
+  DB_DATABASE: ${POSTGRES_DB:-memecoin}
+  DB_USERNAME: ${POSTGRES_USER:-memecoin}
+  DB_PASSWORD: ${POSTGRES_PASSWORD:-secret}
+  CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5180}
+
+x-backend-volumes: &backend-volumes
+  - ./backend:/var/www/html
+  - backend-vendor:/var/www/html/vendor
+  # Read-only so the static compose test can inspect it from inside the container
+  # (the repo root is not otherwise mounted). Path mirrors the host layout.
+  - ./docker-compose.yml:/var/www/docker-compose.yml:ro
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -15,26 +42,39 @@ services:
       timeout: 5s
       retries: 10
 
+  # HTTP API only.
   backend:
-    build:
-      context: .
-      dockerfile: docker/backend/Dockerfile
-    environment:
-      DB_CONNECTION: pgsql
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_DATABASE: ${POSTGRES_DB:-memecoin}
-      DB_USERNAME: ${POSTGRES_USER:-memecoin}
-      DB_PASSWORD: ${POSTGRES_PASSWORD:-secret}
-      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5180}
+    build: *backend-build
+    environment: *backend-env
     ports:
       - "${BACKEND_PORT:-8010}:8010"
-    volumes:
-      - ./backend:/var/www/html
-      - backend-vendor:/var/www/html/vendor
+    volumes: *backend-volumes
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "php -r \"exit(@fsockopen('127.0.0.1', 8010) ? 0 : 1);\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 90s
+    restart: unless-stopped
+
+  # Scheduled ingestion only. No HTTP port. Runs Laravel's scheduler process,
+  # which fires `memecoins:discover --trigger=scheduled` every 10 minutes
+  # (withoutOverlapping) — writing ingestion_runs, market_snapshots and
+  # observed-peak updates to PostgreSQL. No Redis / Horizon / queue worker.
+  scheduler:
+    build: *backend-build
+    command: ["php", "artisan", "schedule:work"]
+    environment: *backend-env
+    volumes: *backend-volumes
+    depends_on:
+      postgres:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
 
   frontend:
     build:

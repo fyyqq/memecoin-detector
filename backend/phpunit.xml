@@ -22,10 +22,17 @@
         <env name="APP_MAINTENANCE_DRIVER" value="file"/>
         <env name="BCRYPT_ROUNDS" value="4"/>
         <env name="BROADCAST_CONNECTION" value="null"/>
-        <env name="CACHE_STORE" value="array"/>
-        <env name="DB_CONNECTION" value="sqlite"/>
-        <env name="DB_DATABASE" value=":memory:"/>
-        <env name="DB_URL" value=""/>
+        <env name="CACHE_STORE" value="array" force="true"/>
+        <!-- Tests run on a dedicated Postgres DB (project rule: no SQLite).
+             The Docker container's DB_DATABASE=memecoin env var shadows these
+             <env> overrides, so Tests\TestCase::createApplication() forces
+             `memecoin_test` on the booted app. Create the DB once:
+             docker compose exec postgres createdb -U memecoin memecoin_test -->
+        <env name="DB_CONNECTION" value="pgsql" force="true"/>
+        <env name="DB_HOST" value="postgres" force="true"/>
+        <env name="DB_PORT" value="5432" force="true"/>
+        <env name="DB_DATABASE" value="memecoin_test" force="true"/>
+        <env name="DB_URL" value="" force="true"/>
         <env name="MAIL_MAILER" value="array"/>
         <env name="QUEUE_CONNECTION" value="sync"/>
         <env name="SESSION_DRIVER" value="array"/>

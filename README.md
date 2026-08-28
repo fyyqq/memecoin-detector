@@ -52,6 +52,10 @@ docker compose up -d --build
 First boot installs Composer + npm dependencies and runs migrations, so give
 the backend a minute. Watch progress with `docker compose logs -f backend`.
 
+This starts four services — `postgres`, `backend` (HTTP API), `scheduler`
+(runs memecoin ingestion every 10 minutes), and `frontend`. Nothing else needs
+to be started by hand; watch ingestion with `docker compose logs -f scheduler`.
+
 Hot reload is enabled for both apps: edit files in `backend/` or `frontend/`
 and changes are picked up automatically.
 

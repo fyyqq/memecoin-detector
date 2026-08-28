@@ -28,8 +28,10 @@ until php -r "exit(@fsockopen(getenv('DB_HOST') ?: 'postgres', (int)(getenv('DB_
 done
 echo "PostgreSQL is up."
 
-# Run migrations (safe no-op when already migrated)
-php artisan migrate --force || true
+# Run migrations. --isolated takes a cache lock (shared via the bind-mounted
+# storage/) so the backend and scheduler containers starting together never
+# migrate concurrently. Safe no-op when already migrated.
+php artisan migrate --force --isolated || true
 
 php artisan config:clear
 

@@ -1,28 +1,212 @@
+:root {
+  color-scheme: light dark;
+}
+
 .app {
-  max-width: 32rem;
-  margin: 4rem auto;
-  padding: 0 1.5rem;
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  line-height: 1.6;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 2rem 1.25rem 4rem;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  line-height: 1.5;
 }
 
-.app h1 {
-  margin-bottom: 0.25rem;
+.app-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
 }
 
-.hint {
-  color: #666;
+.app-header h1 {
+  margin: 0;
+  font-size: 1.6rem;
+}
+
+.subtitle {
+  margin: 0.15rem 0 0;
+  color: #6b7280;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.controls {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.75rem;
+}
+
+.chain-filter {
+  display: flex;
+  flex-direction: column;
+  font-size: 0.8rem;
+  color: #6b7280;
+  gap: 0.2rem;
+}
+
+.chain-filter select,
+.controls button,
+.state button {
+  font: inherit;
+  padding: 0.4rem 0.7rem;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  background: #f9fafb;
+  cursor: pointer;
+}
+
+.controls button:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+
+.qualification {
+  margin: 1rem 0 1.5rem;
+  padding: 0.6rem 0.8rem;
+  background: #eef2ff;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  color: #3730a3;
+}
+
+.state {
+  margin: 2rem 0;
+  padding: 1.5rem;
+  text-align: center;
+  border: 1px dashed #d1d5db;
+  border-radius: 8px;
+}
+
+.state-error {
+  border-color: #fca5a5;
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.state .muted,
+.provenance .muted {
+  color: #6b7280;
+  font-size: 0.85rem;
+}
+
+.table-wrap {
+  overflow-x: auto;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+}
+
+.memecoin-table {
+  width: 100%;
+  border-collapse: collapse;
   font-size: 0.9rem;
 }
 
-[data-status="ok"] {
-  color: #1a7f37;
+.memecoin-table th,
+.memecoin-table td {
+  padding: 0.55rem 0.75rem;
+  text-align: left;
+  white-space: nowrap;
+  border-bottom: 1px solid #f0f0f0;
 }
 
-[data-status="error"] {
-  color: #cf222e;
+.memecoin-table thead th {
+  background: #f9fafb;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #6b7280;
 }
 
-[data-status="checking"] {
-  color: #9a6700;
+.memecoin-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.memecoin-table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.memecoin-table .strong {
+  font-weight: 700;
+}
+
+.memecoin-table .symbol {
+  display: block;
+  font-weight: 700;
+}
+
+.memecoin-table .name {
+  display: block;
+  color: #6b7280;
+  font-size: 0.8rem;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.provenance {
+  margin-top: 1.5rem;
+  font-size: 0.9rem;
+  color: #374151;
+}
+
+.provenance p {
+  margin: 0.3rem 0;
+}
+
+.provenance code {
+  font-size: 0.8rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  .subtitle,
+  .chain-filter,
+  .state .muted,
+  .provenance .muted,
+  .memecoin-table thead th,
+  .memecoin-table .name {
+    color: #9ca3af;
+  }
+
+  .chain-filter select,
+  .controls button,
+  .state button {
+    background: #1f2937;
+    border-color: #374151;
+    color: inherit;
+  }
+
+  .qualification {
+    background: #1e1b4b;
+    color: #c7d2fe;
+  }
+
+  .table-wrap,
+  .memecoin-table th,
+  .memecoin-table td {
+    border-color: #374151;
+  }
+
+  .memecoin-table thead th {
+    background: #111827;
+  }
+
+  .memecoin-table th,
+  .memecoin-table td {
+    border-bottom-color: #1f2937;
+  }
+
+  .state {
+    border-color: #374151;
+  }
+
+  .state-error {
+    background: #3f1d1d;
+    color: #fecaca;
+    border-color: #7f1d1d;
+  }
+
+  .provenance {
+    color: #d1d5db;
+  }
 }
