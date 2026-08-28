@@ -1,11 +1,20 @@
+import { useNavigate } from 'react-router-dom'
 import type { Memecoin } from '../types/memecoin'
 import { formatAgeDays, formatDateTime, formatRelativeTime, formatUsd } from '../lib/format'
+import { CopyAddress } from './CopyAddress'
 
 interface MemecoinTableProps {
   rows: Memecoin[]
 }
 
 export function MemecoinTable({ rows }: MemecoinTableProps) {
+  const navigate = useNavigate()
+
+  const open = (row: Memecoin) =>
+    navigate(
+      `/memecoin/${encodeURIComponent(row.chain_id)}/${encodeURIComponent(row.token_address)}`,
+    )
+
   return (
     <div className="table-wrap">
       <table className="memecoin-table">
@@ -25,9 +34,25 @@ export function MemecoinTable({ rows }: MemecoinTableProps) {
         </thead>
         <tbody>
           {rows.map((row) => (
-            <tr key={row.id}>
+            <tr
+              key={row.id}
+              className="row-link"
+              role="link"
+              tabIndex={0}
+              aria-label={`View ${row.symbol ?? row.token_address} detail`}
+              onClick={() => open(row)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault()
+                  open(row)
+                }
+              }}
+            >
               <td>
-                <span className="symbol">{row.symbol ?? '—'}</span>
+                <span className="symbol">
+                  {row.symbol ?? '—'}
+                  <CopyAddress address={row.token_address} className="copy-inline" />
+                </span>
                 <span className="name">{row.name ?? row.token_address}</span>
               </td>
               <td>{row.chain_id}</td>

@@ -131,8 +131,75 @@
 }
 
 .memecoin-table .symbol {
-  display: block;
+  display: flex;
+  align-items: center;
   font-weight: 700;
+}
+
+/* Clickable rows open the token detail page. */
+.row-link {
+  cursor: pointer;
+}
+
+.row-link:hover td {
+  background: #f9fafb;
+}
+
+.row-link:focus-visible {
+  outline: 2px solid #6366f1;
+  outline-offset: -2px;
+}
+
+/* Copy contract address control. */
+.copy-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font: inherit;
+  font-size: 0.72rem;
+  line-height: 1;
+  padding: 0.15rem 0.4rem;
+  border: 1px solid #d1d5db;
+  border-radius: 5px;
+  background: #f9fafb;
+  color: #6b7280;
+  cursor: pointer;
+}
+
+.copy-btn:hover {
+  color: #111827;
+  border-color: #9ca3af;
+}
+
+.copy-btn-copied {
+  color: #047857;
+  border-color: #6ee7b7;
+  background: #ecfdf5;
+}
+
+.copy-btn-error {
+  color: #b91c1c;
+  border-color: #fca5a5;
+  background: #fef2f2;
+}
+
+.copy-btn-text {
+  font-weight: 600;
+}
+
+.copy-inline {
+  margin-left: 0.5rem;
+}
+
+@media (max-width: 640px) {
+  .copy-btn-text {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
 }
 
 .memecoin-table .name {
@@ -158,22 +225,213 @@
   font-size: 0.8rem;
 }
 
+/* Token detail page — same visual language as the dashboard. */
+.back-link {
+  margin: 0 0 1rem;
+  font-size: 0.9rem;
+}
+
+.detail-header {
+  border-bottom: 1px solid #e5e7eb;
+  padding-bottom: 1rem;
+  margin-bottom: 0.5rem;
+}
+
+.detail-header h1 {
+  margin: 0;
+  font-size: 1.5rem;
+}
+
+.detail-symbol {
+  margin: 0.25rem 0 0.75rem;
+  color: #6b7280;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.detail-ca {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.5rem;
+}
+
+.detail-ca-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #6b7280;
+}
+
+.detail-ca-value {
+  max-width: min(62vw, 360px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.85rem;
+  background: #f3f4f6;
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+}
+
+.detail-section {
+  margin: 1.75rem 0;
+}
+
+.detail-section h2 {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #6b7280;
+  margin: 0 0 0.75rem;
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 0 1.75rem;
+}
+
+.data-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.45rem 0;
+  border-bottom: 1px solid #f0f0f0;
+  font-size: 0.9rem;
+}
+
+.data-label {
+  color: #6b7280;
+}
+
+.data-value {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.detail-note {
+  margin-top: 0.75rem;
+}
+
+.placeholder-card {
+  border: 1px dashed #d1d5db;
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+  background: #fafafa;
+}
+
+.placeholder-card p {
+  margin: 0.3rem 0;
+}
+
+.placeholder-lead {
+  font-weight: 600;
+}
+
+.sparkline {
+  width: 100%;
+  height: 120px;
+  color: #6366f1;
+  margin-bottom: 1rem;
+  display: block;
+}
+
+.snapshot-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.snapshot-table th,
+.snapshot-table td {
+  padding: 0.45rem 0.7rem;
+  text-align: right;
+  white-space: nowrap;
+  border-bottom: 1px solid #f0f0f0;
+  font-variant-numeric: tabular-nums;
+}
+
+.snapshot-table th:first-child,
+.snapshot-table td:first-child {
+  text-align: left;
+}
+
+.snapshot-table thead th {
+  background: #f9fafb;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #6b7280;
+}
+
+.snapshot-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
 @media (prefers-color-scheme: dark) {
   .subtitle,
   .chain-filter,
   .state .muted,
   .provenance .muted,
   .memecoin-table thead th,
-  .memecoin-table .name {
+  .memecoin-table .name,
+  .detail-symbol,
+  .detail-section h2,
+  .data-label,
+  .detail-ca-label,
+  .snapshot-table thead th {
     color: #9ca3af;
   }
 
   .chain-filter select,
   .controls button,
-  .state button {
+  .state button,
+  .copy-btn {
     background: #1f2937;
     border-color: #374151;
     color: inherit;
+  }
+
+  .row-link:hover td {
+    background: #111827;
+  }
+
+  .copy-btn-copied {
+    background: #052e2b;
+    border-color: #047857;
+    color: #6ee7b7;
+  }
+
+  .copy-btn-error {
+    background: #3f1d1d;
+    border-color: #7f1d1d;
+    color: #fecaca;
+  }
+
+  .detail-header {
+    border-color: #374151;
+  }
+
+  .detail-ca-value {
+    background: #1f2937;
+  }
+
+  .data-row,
+  .snapshot-table th,
+  .snapshot-table td {
+    border-bottom-color: #1f2937;
+  }
+
+  .placeholder-card {
+    background: #111827;
+    border-color: #374151;
+  }
+
+  .snapshot-table thead th {
+    background: #111827;
   }
 
   .qualification {

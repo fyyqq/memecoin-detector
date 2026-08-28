@@ -229,6 +229,118 @@ not guaranteed lifetime history"* — never labelled "ATH".
 
 ---
 
+## Token Detail View
+
+A read-only drill-down for a single token. Same data contract as the dashboard —
+PostgreSQL only, **never** DexScreener, never a write, never a snapshot.
+
+### Route (frontend)
+
+```
+/                                 → dashboard ("30-Day Leaders")
+/memecoin/:chainId/:tokenAddress   → token detail
+```
+
+Client-side routing via **React Router** (`react-router-dom`). Identity in the URL
+is always `chainId` + `tokenAddress` — **never the symbol**. Both segments are
+`encodeURIComponent`-encoded when links are built and decoded by the router on
+read. Example: `/memecoin/solana/Ci11wAJVj4tMeBo4EJUUKNnejAvHorcktcMSHmSLQdx4`.
+
+On the dashboard, a table row is a link to its detail page (`role="link"`,
+keyboard-activatable). The per-row **copy contract address** button stops event
+propagation, so copying never triggers navigation.
+
+### Read API — `GET /api/memecoins/{chainId}/{tokenAddress}`
+
+- Reads PostgreSQL only. Never calls DexScreener, never writes, never creates
+  snapshots, never mutates state.
+- **Identity is `(chain_id, token_address)`.** `chain_id` is matched
+  case-insensitively; `token_address` is matched exactly first (Solana base58 is
+  case-sensitive) then case-insensitively (checksum-cased EVM addresses).
+  A symbol never resolves.
+- Route params are constrained (`chainId` `[A-Za-z0-9_-]{1,64}`, `tokenAddress`
+  `[A-Za-z0-9._:-]{1,128}`). A miss → `404 {"error": "Memecoin not found."}` —
+  a clean JSON body, never an internal exception.
+- **Dashboard qualification is NOT applied here.** A token that has since fallen
+  below $5M current MC, or aged past 30 days, is still viewable as long as the
+  `Token` row exists. Qualification gates the *list*, not *existence*.
+- **Query strategy (no N+1):** 1 query for the token, 1 query for a bounded
+  window of recent snapshots (`ORDER BY observed_at DESC LIMIT 50`). The first
+  window row is the latest observation — no separate `latestSnapshot` query. The
+  full `market_snapshots` history for a token is **never** loaded.
+
+Response:
+
+```jsonc
+{
+  "data": {
+    "id": 55, "chain_id": "solana", "token_address": "…",
+    "name": "Dogecoin", "symbol": "DOGE",
+
+    "current_market_cap": 2100000,          // latest snapshot — nullable
+    "observed_peak_market_cap": 74600000,   // tokens row — nullable
+    "observed_peak_market_cap_at": "…",
+    "age_days": 8.4,                        // now − earliest_pair_created_at — nullable
+
+    "price_usd": 0.0021, "fdv": 2200000,
+    "liquidity_usd": 74000000, "volume_h24": 69000,
+    "price_change_h24": null, "txns_h24": null,
+    "buys_h24": null, "sells_h24": null,
+
+    "primary_dex_id": "raydium", "primary_pair_address": "…",
+    "pair_count": null,                     // not captured in Sprint 1 → always null
+
+    "earliest_pair_created_at": "…", "first_observed_at": "…", "last_observed_at": "…",
+    "data_source": "dexscreener",
+
+    "snapshots": [                          // newest first, capped at 50
+      { "observed_at": "…", "price_usd": "…", "market_cap": 2100000, "fdv": 2200000,
+        "liquidity_usd": 1200000, "volume_h24": 300000, "price_change_h24": 4.2,
+        "txns_h24": 512, "buys_h24": 300, "sells_h24": 212 }
+    ]
+  },
+  "meta": {
+    "retrieved_at": "…",
+    "recent_snapshot_limit": 50,
+    "observed_peak_note": "observed_peak_market_cap is the highest market cap captured by this detector since first_observed_at — not a guaranteed lifetime / all-time high."
+  }
+}
+```
+
+Missing values are JSON `null`, **never coerced to `0`**.
+
+### Detail page sections
+
+| Section | Source | Notes |
+|---|---|---|
+| Header | token + latest snapshot | name, symbol, chain, full contract address (visually truncated, copied value is never truncated), copy button |
+| Market overview | latest snapshot + token | current MC, **Observed Peak MC** (+ timestamp), age, 24h price change, 24h volume, liquidity, price. Explicitly labelled "the highest market cap this detector has captured … not an all-time high or lifetime high" — never "ATH". |
+| Market activity | latest snapshot | primary DEX / pair, 24h volume, 24h transactions, buys, sells. A null field renders **"Unavailable"** — never a fabricated `0`. |
+| Token identity | token | chain, contract address (+ copy), name, symbol, pair count (`Unavailable`), earliest pair created at, first/last observed at, data source |
+| Observation history | recent snapshots | dependency-free inline market-cap sparkline + a table (Observed At / Market Cap / Price / 24h Volume / Liquidity), newest first, capped at 50. A simple historical view "before we implement charts". |
+| Why did this coin pump? | — | **Placeholder only.** Shows "Pump intelligence is not available yet." and "This section will show evidence-backed catalysts, related-token movement, and supporting evidence when that intelligence layer is added." No AI call, no fabricated reasons, no hardcoded explanations. |
+| Why was this coin created? | — | **Placeholder only.** "Token origin analysis is not available yet." No inference of purpose, creator intent, or narrative without stored evidence. |
+| Data provenance | meta | data source, `retrieved_at`, the observed-peak disclaimer, and a note that the page only reads this app's API and never calls DexScreener directly. |
+
+### Pump / origin intelligence — intentionally deferred
+
+"Why did this coin pump?" and "Why was this coin created?" are **not** implemented
+as real features. We do not yet have pump-event detection, historical external
+evidence, social/news evidence, or causal analysis. The sections exist as clearly
+labelled placeholders so the product shape is visible; they never generate a
+fabricated explanation. Evidence-backed catalysts arrive with a later
+intelligence layer (`PumpEvent` / `Evidence` / `TokenRelation` in the domain
+model), not before.
+
+### Frontend files
+
+`src/api/memecoinDetail.ts` (typed, abortable, `MemecoinNotFoundError` for 404) ·
+`src/types/memecoinDetail.ts` · `src/pages/{Dashboard,MemecoinDetail}.tsx` ·
+`src/components/{CopyAddress,MarketCapSparkline}.tsx` ·
+`src/components/MemecoinTable.tsx` (row → detail navigation) ·
+`src/lib/format.ts` (`formatInteger` / `formatPercent` / `formatPrice`).
+States: `loading` / `ready` / `error` / `not-found` ("Memecoin not found.").
+
 ---
 
 ## Ingestion endpoint (`GET /api/memecoins/discover`)
@@ -521,3 +633,13 @@ mocked (`Tests\Concerns\FakesDexScreener`) — no live calls.
   is clamped / invalid params → `422` / DexScreener never called
   (`Http::assertNothingSent`) / empty DB → `{data: [], meta: {count: 0}}` /
   timestamps are ISO 8601.
+- **`Feature/MemecoinDetailTest`** — `GET /api/memecoins/{chainId}/{tokenAddress}`:
+  returns the token / identified by chain + address (same address, two chains →
+  two tokens) / a symbol is **not** a valid identity → `404` / **latest**
+  snapshot supplies the current fields & history is newest-first / recent
+  snapshots capped at 50 while all rows stay stored / missing token →
+  `404 {"error": "Memecoin not found."}` / endpoint is read-only (token +
+  snapshot counts and the token row unchanged) / DexScreener never called /
+  a token below $5M **and** older than 30 days still resolves (qualification is
+  not an existence gate) / null snapshot fields stay `null` / no per-snapshot
+  N+1.

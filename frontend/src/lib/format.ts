@@ -42,6 +42,27 @@ export function formatDateTime(iso: string | null): string {
   })
 }
 
+/** Whole-number count (24h txns, buys, sells). */
+export function formatInteger(value: number | null): string {
+  if (value === null || Number.isNaN(value)) return '—'
+  return new Intl.NumberFormat().format(Math.round(value))
+}
+
+/** Signed percentage, 2dp (24h price change). */
+export function formatPercent(value: number | null): string {
+  if (value === null || Number.isNaN(value)) return '—'
+  const sign = value > 0 ? '+' : ''
+  return `${sign}${value.toFixed(2)}%`
+}
+
+/** USD price — adapts precision for sub-dollar memecoin prices. */
+export function formatPrice(value: number | null): string {
+  if (value === null || Number.isNaN(value)) return '—'
+  if (value === 0) return '$0'
+  if (value >= 1) return `$${value.toFixed(2)}`
+  return `$${value.toPrecision(3)}`
+}
+
 export function formatRelativeTime(iso: string | null): string {
   if (!iso) return '—'
   const date = new Date(iso)
