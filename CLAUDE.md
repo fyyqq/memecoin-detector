@@ -102,7 +102,7 @@ memecoin-detector/
 │   │   ├── api/         memecoins.ts, memecoinDetail.ts (Laravel only)
 │   │   ├── types/       memecoin.ts, memecoinDetail.ts
 │   │   ├── lib/         format.ts ($74.6M / 8d / % / timestamps)
-│   │   ├── components/  MemecoinTable, ChainFilter, CopyAddress, MarketCapSparkline, RecentlyCrossedSection
+│   │   ├── components/  MemecoinTable, ChainFilter, CopyAddress, MarketCapSparkline, RecentlyCrossedSection, TokenNarrativeSection
 │   │   ├── pages/       Dashboard.tsx, MemecoinDetail.tsx
 │   │   └── App.tsx      React Router: / and /memecoin/:chainId/:tokenAddress
 │   ├── vite.config.ts  host: true, port 5180
@@ -355,9 +355,10 @@ next sprint.
 
 ## Domain model
 
-`Token`, `MarketSnapshot`, `IngestionRun`, `HistoricalPeakEvidence`, `PumpEvent`
-and `Evidence` exist as tables. The rest are documented for naming consistency
-only — do **not** create them yet.
+`Token`, `MarketSnapshot`, `IngestionRun`, `HistoricalPeakEvidence`, `PumpEvent`,
+`Evidence`, `PumpExplanation`, `QualificationEvent`, `TokenNarrativeReport` and
+`TokenNarrativeSource` exist as tables. The rest are documented for naming
+consistency only — do **not** create them yet.
 
 | Concept          | Meaning | Status |
 | ---------------- | ------- | ------ |
@@ -372,6 +373,8 @@ only — do **not** create them yet.
 | `Evidence`       | One timestamped FACT present around a `PumpEvent` (Step 16B) — `category` (`MARKET`/`TOKEN_METADATA`/`ORIGIN`/`NEWS`/`RELATED_TOKEN`; `LISTING`/`COMMUNITY` reserved), `source`, `source_url`, `title`, `observed_at`, `published_at`, `relevance_score` (0–100, investigative relevance NOT causation probability), `confidence` (low/medium/high), `summary` (neutral one-sentence fact), `raw_reference` (short id/domain/hash — no payload JSON), `dedupe_hash`. `belongsTo PumpEvent` + `belongsTo Token`. Stored SEPARATELY from interpretation — never asserts causality. See [docs/evidence-engine.md](docs/evidence-engine.md). | **implemented (Step 16B)** |
 | `PumpExplanation` | One AI-generated, evidence-grounded interpretation per `PumpEvent` (Step 16C) — `status` (`pending`/`completed`/`failed`), `summary`, `primary_catalyst` (fixed enum incl. `UNKNOWN`), `confidence` (low/medium/high), `explanation_json` (full validated structure: summary / secondary_signals / evidence / caveats / unknowns — every claim cites evidence ids), `evidence_count`, `model_provider`, `model_name`, `error_message`, `generated_at`. Unique on `pump_event_id`; upserted on regeneration. The LLM INTERPRETS stored `Evidence` — never adds facts, never asserts causality. `belongsTo PumpEvent`. See [docs/pump-explanation.md](docs/pump-explanation.md). | **implemented (Step 16C)** |
 | `QualificationEvent` | One "$5M crossing" per token per `type` (Step 20) — `type` (`CURRENT_OBSERVATION`/`HISTORICAL_VERIFIED`), `crossed_at` (earliest snapshot ≥ $5M, or earliest CoinGecko-verified ≥ $5M point — candled, never a tick), `threshold_usd`, `evidence_status`, `source` (`dexscreener`/`coingecko`), `market_cap_value`. **Unique on `(token_id, type)`** → idempotent scheduler re-runs; `crossed_at` never rewritten. `HISTORICAL_ESTIMATE`/`UNKNOWN` produce NO event. Only a verified/observed peak in `[$5M, $200M]` gets one. A token can hold both types; representative = `HISTORICAL_VERIFIED` > `CURRENT_OBSERVATION` (the other row preserved). Written ONLY by the pipeline (`QualificationEventRecorder`) — never a read API, never a snapshot scan on GET. `belongsTo Token` / `Token hasMany`. See [docs/qualification-events.md](docs/qualification-events.md). | **implemented (Step 20)** |
+| `TokenNarrativeReport` | One token-level narrative synthesis per token (Step 21) — `origin_status` / `origin_summary` / `origin_explanation_json` (why created) + `popularity_status` / `popularity_summary` / `popularity_explanation_json` (why popular) + `overall_status` (`pending`/`completed`/`partial`/`failed`) / `overall_confidence` / `research_started_at` / `research_completed_at` / `generated_at` / `model_provider` / `model_name` / `research_providers_used` / `error_message` (concise, no traces). **Unique on `token_id`.** The AI INTERPRETS collected sources + our stored `Evidence` / market history — never browses, never invents sources/URLs/dates, never asserts creator intent, never causality-from-timing; every claim cites `token_narrative_sources.id`. Each section validated independently → one can be `completed` while the other `failed` (overall `partial`). Written ONLY by `memecoins:research-narratives`. `belongsTo Token` / `hasMany TokenNarrativeSource`. See [docs/token-narrative-intelligence.md](docs/token-narrative-intelligence.md). | **implemented (Step 21)** |
+| `TokenNarrativeSource` | One concise source behind a narrative report (Step 21) — `section` (`origin`/`popularity`), `source_type` (`official`/`news`/`social`/`market`/`community`/`reference`), `source_name`, `source_url`, `title`, `published_at` (real or **null**, never fabricated), `accessed_at`, `claim` (one sentence), `relevance_score`, `confidence` (quality tier), `provider`. Metadata + claim only — **never a scraped page body**. `unique(token_narrative_report_id, dedupe_hash)` → idempotent re-research. Persisted BEFORE the AI call. `belongsTo TokenNarrativeReport` + `belongsTo Token`. | **implemented (Step 21)** |
 | `MonthlyRanking` | Preserved Top-N leaders for a calendar month. | future |
 
 ## Processing pipeline (concept)
@@ -608,8 +611,13 @@ Explicitly **excluded** from Sprint 1:
   AI "why did this coin pump?" explanation with expandable cited evidence;
   `pending`/`failed`/`UNKNOWN` show neutral notes, never a guessed reason),
   market activity, observation history (sparkline + table), token identity,
-  **"Why was this coin created?"** (placeholder, or stored ORIGIN/TOKEN_METADATA
-  evidence as plain facts when present — never inferred intent), data provenance.
+  **Token narrative intelligence** (Step 21 — two-column block: "Why it became
+  popular" = headline / summary / chronological timeline / dominant factors /
+  confidence / sources; "Why it was created" = origin type / headline / summary /
+  supporting facts / confidence / sources. Stacks on mobile. Each factual line
+  cites expandable `token_narrative_sources`; `pending`/`partial`/`failed` show a
+  neutral note, never a stack trace; never inferred creator intent, never
+  causality from timing), data provenance.
   Reads persisted data/explanations only — never calls AI or DexScreener from
   JS; the chart iframe is the only third-party content.
   `frontend/src/{api,types,lib,components,pages}`.
@@ -684,6 +692,34 @@ Explicitly **excluded** from Sprint 1:
   the next time it's rediscovered while still age-eligible. Config:
   `config/dexscreener.php` → `recent_crossing.*`. Docs:
   `docs/qualification-events.md`.
+- **Token Narrative Intelligence (Step 21)** — `php artisan memecoins:research-narratives`
+  `[--force] [--token=chain:address]`, scheduled **hourly** (`0 * * * *`,
+  `withoutOverlapping(30)`; reuses the `scheduler` container) — SLOW + externally
+  dependent, never on the 10-min cadence, never blocks discovery/pumps. Two
+  token-level questions, SEPARATE from the pump explanation:
+  **"Why was this coin created?"** (origin) + **"Why did this coin become
+  popular?"** (popularity). `NarrativeResearchService` finds sources via a
+  configurable `NarrativeResearchProvider` list (`NARRATIVE_RESEARCH_PROVIDERS`,
+  default `internal,gdelt` — `internal` = our own `Evidence` + token metadata +
+  `PumpEvent`s + `$5M` crossings, always available; `gdelt` = token-level news,
+  degrades to none on failure), ranks them by quality tier (official / reference /
+  reputable-news / internal-market = HIGH; anonymous / repost = LOW — many weak
+  sources never outrank one strong primary), persists `token_narrative_sources`
+  **before** the AI call, then asks the `NarrativeExplanationProvider` (SEPARATE
+  binding, `NARRATIVE_AI_PROVIDER`; `null` = fail, never fabricate) via forced
+  `record_token_narrative` tool call. `NarrativeExplanationValidator` rejects
+  malformed output, out-of-enum values, hallucinated/uncited source ids, uncited
+  facts, **creator-intent claims** (origin), and **causal language** (popularity)
+  → that section `failed`. Timeline is sorted chronologically. Source text is
+  untrusted data (delimited block, never the system prompt) — same injection
+  defense as Step 16C. Sections validate independently → `partial` when one
+  succeeds. 24h per-token cooldown (`TOKEN_NARRATIVE_RESEARCH_COOLDOWN_HOURS`),
+  `TOKEN_NARRATIVE_MAX_TOKENS_PER_RUN` (10). Read API `GET /api/memecoins/{chain}/{addr}`
+  exposes `data.token_narrative` (origin + popularity + sources) — **never
+  triggers research, never leaks provider error detail**; `pending` with no
+  report. `ANTHROPIC_API_KEY` server-side only. Config: `config/narrative.php`.
+  Docs: `docs/token-narrative-intelligence.md`.
 - Tables: `tokens`, `market_snapshots`, `ingestion_runs`,
   `historical_peak_evidences`, `pump_events`, `evidences`, `pump_explanations`,
-  `qualification_events`. No queue / trend score / related-token graph / auth.
+  `qualification_events`, `token_narrative_reports`, `token_narrative_sources`.
+  No queue / trend score / related-token graph / auth.

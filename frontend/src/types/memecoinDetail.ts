@@ -219,6 +219,102 @@ export interface MemecoinProvenance {
   historical_estimate_note: string | null
 }
 
+// --- Step 21: Token Narrative Intelligence -------------------------------------
+
+export type NarrativeSectionStatus = 'pending' | 'completed' | 'partial' | 'failed'
+
+export type NarrativeOriginType =
+  | 'COMMUNITY_MEME'
+  | 'INTERNET_MEME'
+  | 'CELEBRITY_MEME'
+  | 'POLITICAL_MEME'
+  | 'CULTURAL_REFERENCE'
+  | 'VIRAL_EVENT'
+  | 'ANIMAL_MEME'
+  | 'NARRATIVE_TOKEN'
+  | 'UTILITY_PLUS_MEME'
+  | 'UNKNOWN'
+
+export type NarrativeTimelineType =
+  | 'MEME_ORIGIN'
+  | 'LAUNCH'
+  | 'MEDIA_ATTENTION'
+  | 'SOCIAL_ATTENTION'
+  | 'CELEBRITY_ATTENTION'
+  | 'EXCHANGE_LISTING'
+  | 'NARRATIVE_EVENT'
+  | 'RELATED_TOKEN'
+  | 'COMMUNITY_EVENT'
+  | 'MARKET_ACTIVITY'
+  | 'OTHER'
+
+/** One persisted research source the synthesis cites by `id`. */
+export interface NarrativeSource {
+  id: number
+  section: 'origin' | 'popularity'
+  source_type: 'official' | 'news' | 'social' | 'market' | 'community' | 'reference'
+  source_name: string
+  title: string | null
+  source_url: string | null
+  published_at: string | null
+  confidence: 'low' | 'medium' | 'high'
+  claim: string
+  relevance_score: number
+}
+
+export interface NarrativeSupportingFact {
+  statement: string
+  source_ids: number[]
+}
+
+export interface NarrativeTimelineEntry {
+  date: string | null
+  title: string
+  description: string
+  type: NarrativeTimelineType
+  source_ids: number[]
+  confidence: 'low' | 'medium' | 'high'
+}
+
+/** `data.token_narrative.origin` — "Why was this coin created?" */
+export interface NarrativeOriginSection {
+  status: NarrativeSectionStatus
+  headline: string | null
+  summary: string | null
+  origin_type?: NarrativeOriginType | null
+  supporting_facts?: NarrativeSupportingFact[]
+  confidence: 'low' | 'medium' | 'high' | null
+  caveats: string[]
+  unknowns: string[]
+}
+
+/** `data.token_narrative.popularity` — "Why did this coin become popular?" */
+export interface NarrativePopularitySection {
+  status: NarrativeSectionStatus
+  headline: string | null
+  summary: string | null
+  timeline?: NarrativeTimelineEntry[]
+  dominant_factors?: string[]
+  confidence: 'low' | 'medium' | 'high' | null
+  caveats: string[]
+  unknowns: string[]
+}
+
+/**
+ * `data.token_narrative` — token-level, evidence-grounded narrative intelligence.
+ * The read API NEVER triggers research; `status: "pending"` when no report
+ * exists. Provider error details are never exposed.
+ */
+export interface TokenNarrative {
+  status: NarrativeSectionStatus
+  generated_at?: string | null
+  model_provider?: string | null
+  research_providers_used?: string[]
+  origin: NarrativeOriginSection
+  popularity: NarrativePopularitySection
+  sources: NarrativeSource[]
+}
+
 /** `GET /api/memecoins/{chainId}/{tokenAddress}` → `data`. */
 export interface MemecoinDetail {
   id: number
@@ -241,6 +337,8 @@ export interface MemecoinDetail {
   snapshots: MemecoinSnapshot[]
   /** Recent pump events + their persisted, evidence-backed AI explanations. */
   pump_intelligence: MemecoinPumpIntelligence
+  /** Token-level origin + popularity narrative intelligence (Step 21). */
+  token_narrative: TokenNarrative
   provenance: MemecoinProvenance
 }
 

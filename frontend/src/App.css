@@ -996,3 +996,146 @@
     background: #111827;
   }
 }
+
+/* --- Step 21: Token narrative intelligence ------------------------------- */
+
+.narrative-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  margin-top: 0.75rem;
+}
+
+@media (max-width: 720px) {
+  .narrative-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.narrative-card {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+  background: #f9fafb;
+}
+
+.narrative-card h3 {
+  margin: 0 0 0.6rem;
+  font-size: 0.95rem;
+}
+
+.narrative-card h4 {
+  font-size: 0.8rem;
+  margin: 0 0 0.35rem;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.narrative-headline {
+  font-weight: 600;
+  margin: 0.4rem 0;
+}
+
+.narrative-summary {
+  margin: 0.4rem 0 0.8rem;
+}
+
+.narrative-block {
+  margin: 0.8rem 0;
+}
+
+.narrative-block ul,
+.narrative-block ol {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+.narrative-block li {
+  margin-bottom: 0.35rem;
+}
+
+.narrative-timeline {
+  list-style: none;
+  padding-left: 0;
+}
+
+.narrative-timeline li {
+  border-left: 2px solid #d1d5db;
+  padding: 0 0 0.6rem 0.7rem;
+  margin-bottom: 0.2rem;
+}
+
+.narrative-timeline li p {
+  margin: 0.2rem 0;
+}
+
+.narrative-timeline-date {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.75rem;
+  color: #6b7280;
+  margin-right: 0.4rem;
+}
+
+.narrative-chip {
+  display: inline-block;
+  padding: 0.02rem 0.35rem;
+  border-radius: 3px;
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  background: #e0e7ff;
+  color: #3730a3;
+  margin-right: 0.4rem;
+}
+
+.narrative-chip-lg {
+  font-size: 0.72rem;
+  padding: 0.1rem 0.5rem;
+}
+
+.narrative-facts li span:first-child {
+  margin-right: 0.2rem;
+}
+
+.narrative-confidence {
+  margin: 0.6rem 0;
+  font-size: 0.85rem;
+}
+
+.narrative-pending {
+  margin: 0.6rem 0;
+}
+
+.narrative-sources,
+.narrative-sources-body {
+  margin-top: 0.6rem;
+}
+
+.narrative-sources summary {
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: #6b7280;
+}
+
+@media (prefers-color-scheme: dark) {
+  .narrative-card {
+    border-color: #374151;
+    background: #111827;
+  }
+
+  .narrative-card h4,
+  .narrative-timeline-date,
+  .narrative-sources summary {
+    color: #9ca3af;
+  }
+
+  .narrative-timeline li {
+    border-left-color: #374151;
+  }
+
+  .narrative-chip {
+    background: #312e81;
+    color: #c7d2fe;
+  }
+}

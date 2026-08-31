@@ -125,3 +125,18 @@ Schedule::command('memecoins:explain-pumps')
     ->withoutOverlapping(15)
     ->sendOutputTo($scheduledCommandOutput)
     ->description('AI evidence-backed explanation of recent pump events');
+
+/*
+| Token Narrative Intelligence (Step 21).
+|
+| "Why was this coin created?" + "Why did it become popular?" — token-level,
+| evidence-grounded AI synthesis. This is SLOW and externally dependent (web
+| research + a larger AI call), so it runs ONCE PER HOUR, not on the 10-minute
+| cadence, and never blocks discovery / pump detection. A 24h per-token cooldown
+| means most hourly runs do little work. withoutOverlapping(30).
+*/
+Schedule::command('memecoins:research-narratives')
+    ->hourly()
+    ->withoutOverlapping(30)
+    ->sendOutputTo($scheduledCommandOutput)
+    ->description('Token origin + popularity narrative research');

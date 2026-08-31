@@ -48,7 +48,7 @@ class MemecoinDetailController extends Controller
                 $query->where('token_address', $tokenAddress)
                     ->orWhereRaw('lower(token_address) = ?', [Str::lower($tokenAddress)]);
             })
-            ->with(['historicalPeakEvidence', 'qualificationEvents'])
+            ->with(['historicalPeakEvidence', 'qualificationEvents', 'narrativeReport.sources'])
             ->first();
 
         if ($token === null) {

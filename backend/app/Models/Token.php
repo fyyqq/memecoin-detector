@@ -125,4 +125,14 @@ class Token extends Model
     {
         return $this->hasOne(HistoricalPeakEvidence::class);
     }
+
+    /**
+     * The token's narrative report (Step 21) — one row per token.
+     *
+     * @return HasOne<TokenNarrativeReport, $this>
+     */
+    public function narrativeReport(): HasOne
+    {
+        return $this->hasOne(TokenNarrativeReport::class);
+    }
 }

@@ -4,6 +4,7 @@ import { API_BASE_URL } from '../api/memecoins'
 import { fetchMemecoinDetail, MemecoinNotFoundError } from '../api/memecoinDetail'
 import { CopyAddress } from '../components/CopyAddress'
 import { MarketCapSparkline } from '../components/MarketCapSparkline'
+import { TokenNarrativeSection } from '../components/TokenNarrativeSection'
 import {
   formatAgeDays,
   formatDateTime,
@@ -137,7 +138,6 @@ interface DetailViewProps {
 function DetailView({ detail, retrievedAt }: DetailViewProps) {
   const { qualification: q, historical_estimate: estimate, observed, latest, pair, provenance } = detail
   const chronological = [...detail.snapshots].reverse()
-  const origin = collectOriginEvidence(detail)
 
   return (
     <article className="detail">
@@ -308,27 +308,9 @@ function DetailView({ detail, retrievedAt }: DetailViewProps) {
         </div>
       </Section>
 
-      {/* 9. WHY WAS THIS COIN CREATED? */}
-      <Section title="Why was this coin created?">
-        {origin.length > 0 ? (
-          <>
-            <p className="muted detail-note">
-              We do not infer creator intent. These are stored factual metadata records only.
-            </p>
-            <div className="evidence-list">
-              {origin.map((ev) => (
-                <EvidenceCard key={ev.id} evidence={ev} />
-              ))}
-            </div>
-          </>
-        ) : (
-          <div className="placeholder-card">
-            <p className="placeholder-lead">Token-origin analysis is not available yet.</p>
-            <p className="muted">
-              We do not infer purpose, creator intent, or narrative without stored evidence.
-            </p>
-          </div>
-        )}
+      {/* 9. TOKEN NARRATIVE INTELLIGENCE — origin + popularity */}
+      <Section title="Token narrative intelligence">
+        <TokenNarrativeSection narrative={detail.token_narrative} />
       </Section>
 
       {/* 10. DATA PROVENANCE */}
@@ -708,15 +690,6 @@ function EvidenceRef({ id, evidence }: { id: number; evidence: CitedEvidence | u
   )
 }
 
-/** A non-collapsible factual evidence card (used for the token-origin section). */
-function EvidenceCard({ evidence }: { evidence: CitedEvidence }) {
-  return (
-    <div className="evidence-ref-body evidence-ref-body-standalone">
-      <EvidenceBody evidence={evidence} />
-    </div>
-  )
-}
-
 function EvidenceBody({ evidence }: { evidence: CitedEvidence }) {
   return (
     <div className="evidence-ref-inner">
@@ -765,18 +738,6 @@ function EvidenceBody({ evidence }: { evidence: CitedEvidence }) {
       )}
     </div>
   )
-}
-
-function collectOriginEvidence(detail: MemecoinDetail): CitedEvidence[] {
-  const byId = new Map<number, CitedEvidence>()
-  for (const event of detail.pump_intelligence.events) {
-    for (const ev of event.explanation.cited_evidence) {
-      if (ev.category === 'ORIGIN' || ev.category === 'TOKEN_METADATA') {
-        byId.set(ev.id, ev)
-      }
-    }
-  }
-  return [...byId.values()]
 }
 
 function hostOf(url: string): string {

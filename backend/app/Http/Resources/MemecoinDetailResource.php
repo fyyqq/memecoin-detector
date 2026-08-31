@@ -11,6 +11,8 @@ use App\Models\PumpEvent;
 use App\Models\PumpExplanation;
 use App\Models\QualificationEvent;
 use App\Models\Token;
+use App\Models\TokenNarrativeReport;
+use App\Models\TokenNarrativeSource;
 use App\Services\AI\PumpExplanationPresenter;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\Request;
@@ -121,6 +123,11 @@ class MemecoinDetailResource extends JsonResource
             'pump_intelligence' => [
                 'events' => $this->pumpIntelligenceEvents(),
             ],
+
+            // Step 21 — token-level narrative intelligence. Two separate
+            // evidence-grounded syntheses (origin + popularity). Never triggers
+            // research; `pending` when no report exists yet.
+            'token_narrative' => $this->tokenNarrative(),
 
             'provenance' => [
                 'data_source' => 'dexscreener',
@@ -250,6 +257,94 @@ class MemecoinDetailResource extends JsonResource
                 'source' => $event->source,
                 'market_cap_value' => $event->market_cap_value,
             ])->all(),
+        ];
+    }
+
+    /**
+     * Token-level narrative intelligence (Step 21).
+     *
+     * Read-only. NEVER triggers research. `origin` / `popularity` each report
+     * their own status (`pending` when no report exists, `failed` without any
+     * provider error detail). `sources` are the persisted, ranked source rows
+     * the synthesis cites by id.
+     *
+     * @return array<string,mixed>
+     */
+    private function tokenNarrative(): array
+    {
+        /** @var TokenNarrativeReport|null $report */
+        $report = $this->relationLoaded('narrativeReport') ? $this->narrativeReport : null;
+
+        if ($report === null) {
+            return [
+                'status' => 'pending',
+                'generated_at' => null,
+                'origin' => $this->narrativeSectionPayload(null, 'pending'),
+                'popularity' => $this->narrativeSectionPayload(null, 'pending'),
+                'sources' => [],
+            ];
+        }
+
+        /** @var Collection<int, TokenNarrativeSource> $sources */
+        $sources = $report->relationLoaded('sources') ? $report->sources : collect();
+
+        return [
+            'status' => $report->overall_status,
+            'generated_at' => $report->generated_at?->toIso8601String(),
+            'model_provider' => $report->model_provider,
+            'research_providers_used' => $report->research_providers_used ?? [],
+            'origin' => $this->narrativeSectionPayload($report->origin_explanation_json, $report->origin_status),
+            'popularity' => $this->narrativeSectionPayload($report->popularity_explanation_json, $report->popularity_status),
+            'sources' => $sources
+                ->sortBy('id')
+                ->map(fn (TokenNarrativeSource $s): array => [
+                    'id' => (int) $s->id,
+                    'section' => $s->section,
+                    'source_type' => $s->source_type,
+                    'source_name' => $s->source_name,
+                    'title' => $s->title,
+                    'source_url' => $s->source_url,
+                    'published_at' => $s->published_at?->toIso8601String(),
+                    'confidence' => $s->confidence,
+                    'claim' => $s->claim,
+                    'relevance_score' => (int) $s->relevance_score,
+                ])
+                ->values()
+                ->all(),
+        ];
+    }
+
+    /**
+     * @param  array<string,mixed>|null  $json
+     * @return array<string,mixed>
+     */
+    private function narrativeSectionPayload(?array $json, string $status): array
+    {
+        $base = [
+            'status' => $status,
+            'headline' => null,
+            'summary' => null,
+            'confidence' => null,
+            'caveats' => [],
+            'unknowns' => [],
+        ];
+
+        if (! is_array($json) || $status !== 'completed') {
+            // Only expose the validated body for a completed section.
+            return $base;
+        }
+
+        return [
+            ...$base,
+            'headline' => $json['headline'] ?? null,
+            'summary' => $json['summary'] ?? null,
+            'origin_type' => $json['origin_type'] ?? null,
+            'supporting_facts' => $json['supporting_facts'] ?? [],
+            'timeline' => $json['timeline'] ?? [],
+            'dominant_factors' => $json['dominant_factors'] ?? [],
+            'confidence' => $json['confidence'] ?? null,
+            'caveats' => $json['caveats'] ?? [],
+            'unknowns' => $json['unknowns'] ?? [],
         ];
     }
 
