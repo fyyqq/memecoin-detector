@@ -9,13 +9,20 @@ Background / API capability analysis: [dexscreener-reconnaissance.md](dexscreene
 
 ## Business rule
 
-> **Eligibility requires age ≤ 30 days AND a VERIFIED or OBSERVED market cap
-> ≥ $5M** — either our own DexScreener snapshot saw MC ≥ $5M
-> (`CURRENT_OBSERVATION`) or CoinGecko has a verified historical market-cap point
-> ≥ $5M (`HISTORICAL_VERIFIED`). "Observed peak" means the highest market cap
-> captured by **our own snapshots** since we first saw the token — **not** a
-> guaranteed lifetime / all-time / historical high. Current market cap may be
-> below $5M and the token still qualifies.
+> **Eligibility requires age ≤ 30 days AND a VERIFIED or OBSERVED market-cap
+> peak in `[$5M, $200M]`** (Step 19 — a bounded universe). The *qualifying peak*
+> is the highest market cap we trust: `CURRENT_OBSERVATION` (our own DexScreener
+> snapshot saw MC ≥ $5M) or `HISTORICAL_VERIFIED` (CoinGecko verified historical
+> MC ≥ $5M).
+>
+> - The **floor** is a *peak* rule: a token whose **current** MC has dumped
+>   below $5M **stays qualified** if an earlier observation / historical evidence
+>   already cleared it. It is never re-disqualified on current MC alone.
+> - The **ceiling** applies to the greatest verified/observed peak: a token that
+>   ever printed a peak **> $200M** is **excluded** even if its current MC is far
+>   lower.
+> - Also required (where the field is available on the current/representative
+>   pair): `volume_h24 > 0` and `liquidity_usd > 0`.
 >
 > **FDV never substitutes for market cap.** An FDV-based historical estimate
 > (GeckoTerminal peak price × total supply, `HISTORICAL_ESTIMATE`) is
@@ -24,15 +31,17 @@ Background / API capability analysis: [dexscreener-reconnaissance.md](dexscreene
 **Market Cap** = price × **circulating** supply (the real tradable size).
 **FDV** = price × **total** supply (assumes every token is already circulating).
 For a memecoin with a treasury / vesting / un-minted allocation, FDV can be many
-times the real market cap — which is why an FDV estimate cannot put a token on
-the ≥ $5M market-cap list.
+times the real market cap — which is why an FDV estimate cannot put a token in
+the $5M–$200M market-cap universe.
 
-| Age | Observed peak MC | Current MC | Result |
+| Age | Qualifying peak (observed/verified) | Current MC | Result |
 |---|---|---|---|
-| 12 d | $11M (stored) | $2M | **QUALIFIED** |
+| 12 d | $11M | $2M | **QUALIFIED** — floor is a peak rule |
+| 12 d | $80M | $2M | **QUALIFIED** |
 | 12 d | $4M | $3M | not qualified (`observed_peak_below_threshold`) |
+| 12 d | $320M | $80M | **not qualified** (`qualifying_peak_above_ceiling`) — peak exceeded $200M |
 | 12 d | — (first seen today) | $7M | **QUALIFIED** — the $7M is stored as the first observed peak |
-| 12 d | — (first seen today) | $3M | not qualified (`insufficient_historical_observation` — we do **not** claim it never crossed $5M) |
+| 12 d | — (first seen today) | $250M | not qualified — persisted, but peak > $200M ceiling |
 | 45 d | $20M | — | not qualified (`older_than_max_age`) |
 
 ### Cold-start limitation
@@ -480,12 +489,17 @@ scheduler / manual                         browser
 **`GET /api/memecoins`** — read-only. It **never** calls DexScreener, CoinGecko
 or GeckoTerminal, never writes, never runs discovery. Query params: `?chain=<id>`
 (any chain id; the frontend dropdown is just a convenience list), `?limit=`
-(default 20, server max 50). Qualification (Step 13C, corrected): `earliest_pair_created_at`
+(default 20, server max 50). Qualification (Step 13C, refined in Step 19): `earliest_pair_created_at`
 within `max_age_days` of now **AND** a **verified / observed market cap** has ever
-reached the threshold — via `observed_peak_market_cap >= $5M`
+peaked **inside the `$5M`–`$200M` band** — via `observed_peak_market_cap >= $5M`
 (`CURRENT_OBSERVATION`) **or** `historical_peak_status = HISTORICAL_VERIFIED` with
-`historical_peak_value >= $5M`. **`HISTORICAL_ESTIMATE` (FDV basis) and `UNKNOWN`
-are excluded** — an FDV estimate is not a market cap. Sorted by
+`historical_peak_value >= $5M`, **AND**
+`GREATEST(observed_peak_market_cap, historical_peak_value) <= $200M`.
+**`HISTORICAL_ESTIMATE` (FDV basis) and `UNKNOWN` are excluded** — an FDV estimate
+is not a market cap. A token whose verified/observed peak ever exceeded `$200M`
+is **excluded even if its current market cap has fallen back into the band** — we
+do not re-qualify on current MC. A token that dumped *below* `$5M` after an
+in-band peak **stays qualified** (the floor is a peak rule). Sorted by
 `GREATEST(observed_peak_market_cap, historical_peak_value)` DESC. No momentum
 scoring.
 
@@ -521,7 +535,11 @@ Response:
   "meta": {
     "count": 2,
     "retrieved_at": "2026-08-28T07:54:41+00:00",
-    "filters": { "max_age_days": 30, "observed_peak_market_cap_min_usd": 5000000 }
+    "filters": {
+      "max_age_days": 30,
+      "observed_peak_market_cap_min_usd": 5000000,
+      "observed_peak_market_cap_max_usd": 200000000
+    }
   }
 }
 ```
@@ -815,7 +833,12 @@ Invalid params → `422`. Provider outage → `200` with `data: []` + diagnostic
       "age_days": 12.4,                       // nullable
 
       "size_basis": "market_cap",             // "market_cap" | "fdv" | "unknown"
-      "sources": ["search", "boost"],
+      "sources": ["trending_meta", "profile", "boost"],
+      "discovery_context": {                  // null unless surfaced via trending meta
+        "trending_meta_slug": "chinese",
+        "trending_meta_name": "Chinese",
+        "trending_meta_count": 2
+      },
       "data_source": "dexscreener",
       "retrieved_at": "2026-08-28T12:00:00+00:00"
     }
@@ -824,8 +847,12 @@ Invalid params → `422`. Provider outage → `200` with `data: []` + diagnostic
     "count": 1,
     "limit": 20,
     "chain": null,
-    "filters": { "max_age_days": 30, "observed_peak_market_cap_min_usd": 5000000 },
-    "coverage_note": "Activity- and keyword-driven sample; not an exhaustive token census.",
+    "filters": {
+      "max_age_days": 30,
+      "observed_peak_market_cap_min_usd": 5000000,
+      "observed_peak_market_cap_max_usd": 200000000
+    },
+    "coverage_note": "Trending-meta-first sample (documented DexScreener meta APIs); activity feeds + optional keyword fallback; not an exhaustive token census.",
     "observed_peak_note": "observed_peak_market_cap is the highest market cap captured by our own snapshots since observed_since — not a guaranteed lifetime high.",
     "diagnostics": { … see below … },
     "not_qualified_sample": [
@@ -893,24 +920,96 @@ base URL is **always** `config('dexscreener.base_url')` ← `DEXSCREENER_BASE_UR
 
 ---
 
-## Discovery sources
+## Discovery sources (Step 19 — trending-meta-first)
 
-Configured, easy to edit, **not exhaustive**:
+**Priority order.** Trending-meta discovery is the primary source; keyword
+search is a fallback, OFF by default.
 
-| Source | Endpoint | Contributes | `sources` tag |
-|---|---|---|---|
-| latest token profiles | `/token-profiles/latest/v1` | `chainId` + `tokenAddress` | `profile` |
-| latest token boosts | `/token-boosts/latest/v1` | `chainId` + `tokenAddress` | `boost` |
-| top token boosts | `/token-boosts/top/v1` | `chainId` + `tokenAddress` | `boost` |
-| trending metas | `/metas/trending/v1` | narrative slugs/names → extra **search terms** only | — |
-| curated search terms | `/latest/dex/search?q=` | `baseToken.address` + `chainId` per returned pair | `search` |
+| # | Source | Endpoint(s) | Contributes | `sources` tag | Default | Toggle |
+|---|---|---|---|---|---|---|
+| 1 | **trending meta** | `/metas/trending/v1` → `/metas/meta/v1/{slug}` | full member pairs (market data) — **pre-filtered** before enrichment | `trending_meta` | **ON** | `DEXSCREENER_TRENDING_META_ENABLED` |
+| 2 | latest token profiles | `/token-profiles/latest/v1` | `chainId` + `tokenAddress` | `profile` | ON | `DEXSCREENER_PROFILES_ENABLED` |
+| 3 | latest + top boosts | `/token-boosts/latest/v1`, `/token-boosts/top/v1` | `chainId` + `tokenAddress` | `boost` | ON | `DEXSCREENER_BOOSTS_ENABLED` |
+| 4 | keyword search (**fallback**) | `/latest/dex/search?q=` | `baseToken.address` + `chainId` per returned pair | `search` | **OFF** | `MEMECOIN_KEYWORD_DISCOVERY_ENABLED` |
 
-Search terms come from the **search-term engine** (below). Multi-source hits
-union their `sources` tags (deduped, order preserved).
+Multi-source hits union their `sources` tags (deduped, order preserved).
+
+### Why trending-meta, not the real Trending table
+
+DexScreener's live per-pair *Trending* table
+(*Trending — 5M / 1H / 6H / 24H*) is fed by an **undocumented WebSocket**
+(`wss://io.dexscreener.com/dex/screener/v7/pairs/...?rankBy[key]=trendingScoreH6`)
+that is behind **Cloudflare bot management**, sends **binary frames**, is
+**version-tagged** (breaks without notice), and is **not supported** by
+DexScreener. It fails *free / no key / no scraping / no browser automation /
+maintainable*. Full analysis: [trending-discovery-reconnaissance.md](trending-discovery-reconnaissance.md).
+
+Instead we use the **documented** `/metas/trending/v1` → `/metas/meta/v1/{slug}`
+pair — the same **trending narratives** the DexScreener homepage narrative bar
+shows (in the same order), keyless and free. It is an **approximation** of
+per-pair trending: a token that is trending but tagged into none of the ~18
+narratives is missed; keyword search (the fallback) widens the long tail.
+
+### Trending Meta discovery flow
+
+```
+GET /metas/trending/v1            → ≤ DEXSCREENER_TRENDING_META_LIMIT (18) slugs
+GET /metas/meta/v1/{slug}  ×N     → full member pairs (chainId, baseToken, pairAddress,
+                                    marketCap, fdv, liquidity, volume, priceChange, txns,
+                                    dexId, pairCreatedAt, info)
+```
+
+- Each surviving pair → a discovery candidate with `source = trending_meta` and a
+  small `discovery_context` block `{ trending_meta_slug, trending_meta_name,
+  trending_meta_count }`. Multiple metas surfacing one token union to a single
+  `trending_meta` source; `trending_meta_count` records how many.
+- **The paid narrative-bar ad is ignored.** The documented `/metas/*` responses
+  never carry it; a defensive guard also drops any non-pair entry
+  (`trending_meta_ad_or_malformed_skipped`).
+
+### Pre-filter (before enrichment)
+
+Because meta pairs already carry market data, candidates are filtered **before**
+the expensive `/token-pairs/v1` enrichment. Drop if any of:
+
+| # | Check | Drop reason |
+|---|---|---|
+| 1 | `marketCap` present and `> 0` | `market_cap_missing_or_zero` |
+| 2 | `marketCap <= $200M` (`MEMECOIN_OBSERVED_PEAK_MAX_USD`) | `market_cap_above_ceiling` |
+| 3 | `liquidity.usd > 0` | `liquidity_zero` |
+| 4 | `volume.h24 > 0` | `volume_zero` |
+| 5 | `pairCreatedAt` present | `pair_created_at_missing` |
+| 6 | this pair's age `<= 35 days` (`MEMECOIN_PREFILTER_MAX_AGE_DAYS`) | `loose_age_exceeded` |
+
+**The `>= $5M` lower bound is NOT a pre-filter** — a token may currently be
+below $5M yet have qualified earlier (or via historical evidence). The floor is a
+qualification-step peak rule.
+
+The loose 35-day check is **performance only**. Final age validation always uses
+`earliest_pair_created_at` = `min(pairCreatedAt)` across **all** of the token's
+pairs from full enrichment (a new pool on an old token still fails). `pairCreatedAt`
+is DEX pool creation time, never "token creation date".
+
+### Representative pair
+
+Unchanged: the token's pair with the **highest `liquidity.usd`** (deterministic
+lexical-smallest `pairAddress` fallback).
+
+### Candidate prioritization (deterministic, market cap is NOT a signal)
+
+1. surfaced by a trending meta at all
+2. number of **distinct** trending metas that surfaced it
+3. profile signal present
+4. boost signal present
+5. keyword-search occurrence count
+6. profile freshness (list position) — stable secondary tie-break
+7. `token_key` ascending — total, stable final tie-break
+
+Paid boost feeds can never out-priority organic trending-meta evidence.
 
 ---
 
-## Discovery Coverage Strategy (Step 14)
+## Discovery Coverage Strategy (Step 14, refined in Step 19)
 
 ### Why DexScreener cannot provide exhaustive discovery
 
@@ -918,11 +1017,17 @@ There is **no universal "all newly launched tokens" endpoint**
 (`dexscreener-reconnaissance.md §6`). `/latest/dex/search` needs a `q`, returns
 ≤ 30 rows, has no pagination and no chain filter. The activity feeds
 (`/token-profiles/*`, `/token-boosts/*`) list tokens whose owners **paid**
-DexScreener. So discovery is an **activity- and keyword-driven sample**, never a
-census. Step 14's goal is *"maximize relevant newly-active memecoins discovered
-per unit of API budget"* — not "discover everything".
+DexScreener. Even the trending-narrative feed is ~18 DexScreener-curated metas.
+So discovery is a **trending-narrative + activity sample**, never a census —
+"maximize relevant trending memecoins discovered per unit of API budget", not
+"discover everything".
 
-### Search-term engine (`App\Services\DexScreener\SearchTermEngine`)
+### Keyword search-term engine (`SearchTermEngine`) — fallback only
+
+> **Step 19:** keyword discovery is a **supplemental long-tail fallback**, OFF by
+> default (`MEMECOIN_KEYWORD_DISCOVERY_ENABLED=false`). It never overrides
+> trending-meta discovery. `SearchTermEngine` is only consulted when it is
+> enabled. It is kept, not deleted.
 
 Deterministic and reproducible (no rotation / randomness). Builds one term list
 per run by priority:
@@ -976,13 +1081,24 @@ because it is in a UI list.
 `meta.diagnostics` (and the persisted `ingestion_runs` columns) add:
 
 ```
+trending_meta_enabled / trending_meta_count / trending_meta_slugs_used
+trending_meta_pairs_seen / trending_meta_unique_candidates / trending_meta_tokens_unique
+trending_meta_prefilter_dropped / trending_meta_prefilter_reasons
+                              { market_cap_missing_or_zero, market_cap_above_ceiling,
+                                liquidity_zero, volume_zero, pair_created_at_missing,
+                                loose_age_exceeded }
+trending_meta_ad_or_malformed_skipped
+pre_filtered_candidates        (candidates surviving the pre-filter → dedup input)
+deferred_candidates
+keyword_discovery_enabled
 search_term_budget / search_terms_used / search_terms_with_results / search_terms_empty
 search_term_categories        { core, meta_slug, meta_name, ecosystem }
-discovery_source_counts       { profile, boost, search }  (unique candidates per source)
-chains_discovered             { <chain_id>: <count> }
+discovery_source_counts       { trending_meta, profile, boost, search }  (unique candidates per source)
+chains_discovered             { <chain_id>: <count> }  (only chains actually observed)
 raw_discovery_candidates / unique_candidates
 discovery_candidate_cap / candidate_cap_dropped / candidates_considered
 selected_for_enrichment / enrichment_deferred
+not_qualified_peak_above_ceiling   (in-band floor cleared but peak > $200M)
 ```
 
 ### `GET /api/memecoins/discovery-status`
@@ -1070,10 +1186,24 @@ unique_candidates                 after token_key dedupe
 candidates_after_chain_filter     after optional ?chain=
 enrichment_attempted              capped candidate count
 enriched_ok / enrichment_failed
-search_terms_used / _with_results / _empty   search-term engine outcome
+trending_meta_enabled             is trending-meta discovery on (primary source)
+trending_meta_count               metas expanded this run (≤ DEXSCREENER_TRENDING_META_LIMIT)
+trending_meta_slugs_used          the meta slugs consumed
+trending_meta_pairs_seen          member pair objects read across all metas
+trending_meta_unique_candidates   distinct tokens contributed by trending meta (post pre-filter)
+trending_meta_tokens_unique       distinct tokens seen in metas before pre-filter
+trending_meta_prefilter_dropped   meta pairs rejected by the pre-filter
+trending_meta_prefilter_reasons   { market_cap_missing_or_zero, market_cap_above_ceiling,
+                                    liquidity_zero, volume_zero, pair_created_at_missing,
+                                    loose_age_exceeded }
+trending_meta_ad_or_malformed_skipped  meta rows with no chain/address/pair (incl. the paid ad)
+pre_filtered_candidates           candidates surviving the pre-filter (dedup input)
+deferred_candidates               unique candidates beyond MEMECOIN_MAX_ENRICH
+keyword_discovery_enabled         is the keyword fallback on (default false)
+search_terms_used / _with_results / _empty   search-term engine outcome (fallback only)
 search_term_categories            { core, meta_slug, meta_name, ecosystem }
-discovery_source_counts           { profile, boost, search } — unique candidates per source
-chains_discovered                 { <chain_id>: <count> } — candidates actually seen, desc
+discovery_source_counts           { trending_meta, profile, boost, search } — unique candidates per source
+chains_discovered                 { <chain_id>: <count> } — only chains actually observed, desc
 discovery_candidate_cap / candidate_cap_dropped / candidates_considered
 selected_for_enrichment / enrichment_deferred
 age_unknown                       excluded: every pairCreatedAt null (not persisted)
@@ -1084,11 +1214,13 @@ snapshots_written                 MarketSnapshot rows appended this run
 persist_failed                    DB write failed for a candidate (logged, skipped)
 new_tokens / existing_tokens      Token rows created vs already present
 peak_updated                      observed_peak_market_cap raised this run
-qualified                         age ≤ 30d AND a verified/observed market cap ≥ $5M
+qualified                         age ≤ 30d AND a verified/observed market cap peak in [$5M, $200M]
                                   (CURRENT_OBSERVATION or HISTORICAL_VERIFIED only)
 qualified_from_current_observation  qualified because THIS run's reading pushed the peak ≥ $5M
-not_qualified                     age-eligible but no verified/observed market cap ≥ $5M
+not_qualified                     age-eligible but no verified/observed market cap peak in band
 observed_peak_below_threshold     subset of not_qualified where a peak value exists but is < $5M
+not_qualified_peak_above_ceiling  subset of not_qualified where the verified/observed peak cleared
+                                  $5M but exceeds $200M (outside the band — not re-qualified on current MC)
 not_qualified_fdv_estimate_only   subset of not_qualified with an FDV estimate ≥ $5M but no
                                   verified/observed market cap (HISTORICAL_ESTIMATE — informational only)
 returned                          == meta.count
@@ -1210,6 +1342,31 @@ mocked (`Tests\Concerns\FakesDexScreener`) — no live calls.
   `selected_for_enrichment` / `age_eligible` / empty search-term list handled /
   `search_terms_with_results` / `_empty` correct / `discovery-status` endpoint is
   read-only, never calls DexScreener, and handles "no runs".
+- **`Feature/TrendingMetaDiscoveryTest`** (Step 19, 30 tests) — `/metas/trending/v1`
+  is called and its slugs consumed / member pairs become candidates tagged
+  `trending_meta` / one token in multiple metas is unioned (single candidate,
+  `trending_metas` map) / the source set unions across trending meta + profile +
+  boost + search / the paid narrative-bar ad (no chain/address/pair) is ignored /
+  a meta pair with marketCap > $200M is pre-filtered out / marketCap ≤ $200M
+  survives / **the $5M lower bound is NOT a pre-filter** (a $1M meta pair still
+  enriched) / volume.h24 == 0 pre-filtered / liquidity.usd == 0 pre-filtered /
+  missing marketCap pre-filtered / missing pairCreatedAt pre-filtered / loose
+  pair age > 35 d pre-filtered / **final age validation uses
+  `earliest_pair_created_at` from enrichment, not the meta pair's `pairCreatedAt`**
+  / a peak in [$5M, $200M] qualifies / a current MC < $5M after an earlier in-band
+  peak stays qualified / a `HISTORICAL_VERIFIED` peak in band qualifies with low
+  current MC / a verified peak > $200M does NOT qualify even when current MC is
+  back in band (`not_qualified_peak_above_ceiling` ≥ 1) / a `HISTORICAL_ESTIMATE`
+  alone does not qualify / `observed_peak_market_cap` semantics unchanged /
+  trending_meta outranks profile, boost and search in prioritization / more
+  distinct trending metas ranks higher / candidate cap + enrichment cap respected
+  / `DEXSCREENER_TRENDING_META_LIMIT` bounds how many metas are expanded / keyword
+  search is OFF by default (no `/latest/dex/search` call) / keyword fallback works
+  when `MEMECOIN_KEYWORD_DISCOVERY_ENABLED=true` / chain diagnostics reflect only
+  chains actually seen / `discovery-status` exposes trending-meta coverage and
+  never calls DexScreener / historical evidence stays separate, no external lookup
+  for a `CURRENT_OBSERVATION` / trending meta can be disabled, leaving only the
+  activity feeds.
 - **`Feature/DiscoverySchedulerTest`** — `memecoins:discover` is scheduled
   `*/10 * * * *` / carries `--trigger=scheduled` / uses `withoutOverlapping()` /
   appears in `schedule:list`.

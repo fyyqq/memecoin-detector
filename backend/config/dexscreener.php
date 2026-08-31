@@ -37,9 +37,38 @@ return [
     ],
 
     /*
+    |--------------------------------------------------------------------------
+    | Discovery sources (Step 19 — trending-meta-first)
+    |--------------------------------------------------------------------------
+    |
+    | Priority: trending meta > profiles > boosts > keyword search.
+    |
+    | The PRIMARY source is DexScreener's documented Trending Meta API
+    | (GET /metas/trending/v1 -> GET /metas/meta/v1/{slug}). DexScreener's real
+    | per-pair Trending table uses an UNDOCUMENTED WebSocket (io.dexscreener.com)
+    | behind Cloudflare bot management and is deliberately NOT used — see
+    | docs/trending-discovery-reconnaissance.md.
+    |
+    | Keyword search (SearchTermEngine + /latest/dex/search) is a SUPPLEMENTAL
+    | long-tail fallback, OFF by default. It never overrides trending-meta
+    | discovery.
+    */
+    'discovery_sources' => [
+        'trending_meta_enabled' => filter_var(env('DEXSCREENER_TRENDING_META_ENABLED', true), FILTER_VALIDATE_BOOL),
+        // How many entries from /metas/trending/v1 to expand via /metas/meta/v1.
+        // Reconnaissance observed ~18; do not assume exactly 18 forever.
+        'trending_meta_limit' => max(0, (int) env('DEXSCREENER_TRENDING_META_LIMIT', 18)),
+        'profiles_enabled' => filter_var(env('DEXSCREENER_PROFILES_ENABLED', true), FILTER_VALIDATE_BOOL),
+        'boosts_enabled' => filter_var(env('DEXSCREENER_BOOSTS_ENABLED', true), FILTER_VALIDATE_BOOL),
+        // Fallback keyword discovery. OFF by default — NOT primary discovery.
+        'keyword_enabled' => filter_var(env('MEMECOIN_KEYWORD_DISCOVERY_ENABLED', false), FILTER_VALIDATE_BOOL),
+    ],
+
+    /*
     | Category A — core meme search terms for the /latest/dex/search sweep.
     | Curated, easy to edit, NOT exhaustive. Highest priority in the search-term
-    | engine (see App\Services\DexScreener\SearchTermEngine).
+    | engine (see App\Services\DexScreener\SearchTermEngine). Only consulted when
+    | keyword discovery is enabled (fallback).
     */
     'search_terms' => array_values(array_filter(array_map(
         'trim',
@@ -78,13 +107,28 @@ return [
     'trending_meta_terms' => (int) env('DEXSCREENER_TRENDING_META_TERMS', 8),
 
     /*
-    | Sprint 1 eligibility: age <= max_age_days AND observed_peak_market_cap >=
-    | observed_peak_market_cap_min_usd. "Observed peak" = the highest market cap
-    | captured by our own snapshots, not a guaranteed lifetime high.
+    | Sprint 1 eligibility (Step 19 — bounded market-cap universe):
+    |
+    |   age <= max_age_days
+    |   AND $5M <= qualifying_peak <= $200M
+    |
+    | where qualifying_peak is the highest VERIFIED / OBSERVED market cap we trust
+    | (CURRENT_OBSERVATION or HISTORICAL_VERIFIED). A token that ONCE printed a
+    | peak above the ceiling is excluded even if its current MC is far lower. A
+    | token whose CURRENT MC has dumped below the floor STAYS qualified if it
+    | already cleared the floor via an earlier observation / historical evidence
+    | — the lower bound is a peak rule, not a current-MC rule.
+    |
+    | HISTORICAL_ESTIMATE (FDV basis) never qualifies.
     */
     'filters' => [
         'observed_peak_market_cap_min_usd' => (int) env('MEMECOIN_OBSERVED_PEAK_MIN_USD', 5_000_000),
+        'observed_peak_market_cap_max_usd' => (int) env('MEMECOIN_OBSERVED_PEAK_MAX_USD', 200_000_000),
         'max_age_days' => (int) env('MEMECOIN_MAX_AGE_DAYS', 30),
+        // Loose pre-enrichment age gate for trending-meta pairs — PERFORMANCE
+        // ONLY. Final age validation always uses earliest_pair_created_at across
+        // ALL of the token's pairs after full enrichment.
+        'prefilter_max_age_days' => max(1, (int) env('MEMECOIN_PREFILTER_MAX_AGE_DAYS', 35)),
     ],
 
     /*

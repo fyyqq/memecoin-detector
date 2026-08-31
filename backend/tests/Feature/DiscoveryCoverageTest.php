@@ -62,9 +62,16 @@ class DiscoveryCoverageTest extends TestCase
         config()->set('dexscreener.http.retries', 0);
         config()->set('dexscreener.http.retry_sleep_ms', 0);
         config()->set('dexscreener.filters.observed_peak_market_cap_min_usd', 5_000_000);
+        config()->set('dexscreener.filters.observed_peak_market_cap_max_usd', 200_000_000);
         config()->set('dexscreener.filters.max_age_days', 30);
         config()->set('dexscreener.limits.max_candidates_to_enrich', 120);
         config()->set('dexscreener.limits.discovery_candidate_cap', 500);
+        // Step 14 tests exercise the keyword-search discovery path (Step 19
+        // fallback): trending-meta discovery off, keyword on.
+        config()->set('dexscreener.discovery_sources.trending_meta_enabled', false);
+        config()->set('dexscreener.discovery_sources.profiles_enabled', true);
+        config()->set('dexscreener.discovery_sources.boosts_enabled', true);
+        config()->set('dexscreener.discovery_sources.keyword_enabled', true);
         config()->set('historical.coingecko.enabled', false);
         config()->set('historical.geckoterminal.enabled', false);
     }

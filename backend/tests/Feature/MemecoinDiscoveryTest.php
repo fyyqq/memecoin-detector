@@ -53,7 +53,15 @@ class MemecoinDiscoveryTest extends TestCase
         config()->set('dexscreener.http.retries', 0);
         config()->set('dexscreener.http.retry_sleep_ms', 0);
         config()->set('dexscreener.filters.observed_peak_market_cap_min_usd', 5_000_000);
+        config()->set('dexscreener.filters.observed_peak_market_cap_max_usd', 200_000_000);
         config()->set('dexscreener.filters.max_age_days', 30);
+
+        // These tests exercise the keyword-search discovery path (the Step 19
+        // fallback). Turn trending-meta discovery off + keyword on.
+        config()->set('dexscreener.discovery_sources.trending_meta_enabled', false);
+        config()->set('dexscreener.discovery_sources.profiles_enabled', true);
+        config()->set('dexscreener.discovery_sources.boosts_enabled', true);
+        config()->set('dexscreener.discovery_sources.keyword_enabled', true);
 
         // Historical qualification has its own test; keep these pipeline tests
         // focused on the DexScreener / observed-peak path (and offline).

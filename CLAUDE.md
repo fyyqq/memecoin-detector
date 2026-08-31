@@ -363,8 +363,8 @@ only — do **not** create them yet.
 | ---------------- | ------- | ------ |
 | `Token`          | A memecoin (chain + address identity). Unique on `(chain_id, token_address)`. Carries `observed_peak_market_cap` (+`_at`) = OUR OWN snapshot peak; SEPARATE `historical_peak_value` (+`_at`) = a VERIFIED/OBSERVED market cap that qualifies the main list; SEPARATE `historical_estimate_fdv_usd` (+`_at`) = a GeckoTerminal FDV-basis estimate (informational, never qualifies); `historical_peak_status` = the raw label. `first/last_observed_at`, `earliest_pair_created_at`. | **implemented (minimal)** |
 | `MarketSnapshot` | One market observation for a token at `observed_at` (price, market cap, fdv, liquidity, volume, txns, primary pair). Many rows per token. No raw payloads. | **implemented (minimal)** |
-| `IngestionRun`   | One execution of the discovery pipeline — `trigger` (`manual`/`scheduled`), `status` (`running`/`completed`/`failed`), `started/completed_at`, funnel counts, `error_message`. Observability only. | **implemented (minimal)** |
-| `HistoricalPeakEvidence` | One row per token (upserted, re-evaluable): `status` (`CURRENT_OBSERVATION`/`HISTORICAL_VERIFIED`/`HISTORICAL_ESTIMATE`/`UNKNOWN`), `peak_value_usd`, `evidence_source` (dexscreener/coingecko/geckoterminal), `evidence_basis` (market_cap/fdv_total_supply/current_market_cap), `source_reference`, `confidence`, `checked_at`. No provider JSON. **Only `CURRENT_OBSERVATION` / `HISTORICAL_VERIFIED` qualify the main list** (`qualifies()`); `HISTORICAL_ESTIMATE` is `isInformationalEstimate()` only. | **implemented** |
+| `IngestionRun`   | One execution of the discovery pipeline — `trigger` (`manual`/`scheduled`), `status` (`running`/`completed`/`failed`), `started/completed_at`, funnel counts, `error_message`, plus Step 19 trending-meta coverage (`trending_meta_count`, `trending_meta_pairs_seen`, `trending_meta_unique_candidates`, `pre_filtered_candidates`, `discovery_source_counts` json, `trending_meta_slugs_used` json). Observability only. | **implemented (minimal)** |
+| `HistoricalPeakEvidence` | One row per token (upserted, re-evaluable): `status` (`CURRENT_OBSERVATION`/`HISTORICAL_VERIFIED`/`HISTORICAL_ESTIMATE`/`UNKNOWN`), `peak_value_usd`, `evidence_source` (dexscreener/coingecko/geckoterminal), `evidence_basis` (market_cap/fdv_total_supply/current_market_cap), `source_reference`, `confidence`, `checked_at`. No provider JSON. **Only `CURRENT_OBSERVATION` / `HISTORICAL_VERIFIED` with `peak_value_usd` in `[$5M, $200M]` qualify the main list** (`qualifies($min, $max)`; `peakAboveCeiling($min, $max)` flags a peak that cleared the floor but exceeds the ceiling); `HISTORICAL_ESTIMATE` is `isInformationalEstimate()` only. | **implemented** |
 | `Pair`           | A trading pair on a DEX for a token. | future |
 | `Narrative`      | A theme/meta a token belongs to (e.g. "dog coins"). | future |
 | `TokenRelation`  | A relationship between two tokens (co-movement, shared narrative, etc.). | future |
@@ -392,19 +392,25 @@ In scope:
 2. Filter by pair age ≤ 30 days (`earliest_pair_created_at` = earliest DEX pool
    creation across the token's pairs; **not** token deploy time).
 3. **Qualify for the main list when age ≤ 30 days AND a VERIFIED or OBSERVED
-   market cap has EVER reached $5M** — `CURRENT_OBSERVATION` (our own snapshot saw
-   MC ≥ $5M — "observed peak", the highest MC our snapshots captured since
-   `first_observed_at`, not a lifetime high) **or** `HISTORICAL_VERIFIED`
-   (CoinGecko historical market cap). **`HISTORICAL_ESTIMATE` (GeckoTerminal
-   FDV basis = peak price × total supply) does NOT qualify the main list** — it
-   is an informational secondary signal, stored
-   (`tokens.historical_estimate_fdv_usd` + `historical_peak_evidences`) and shown
-   on the detail page as a clearly-labelled estimate, never a market cap.
-   `UNKNOWN` = no safe evidence, never "did not reach $5M". **FDV never
+   market cap has EVER peaked inside the `$5M`–`$200M` band** (Step 19) —
+   `CURRENT_OBSERVATION` (our own snapshot saw MC ≥ $5M — "observed peak", the
+   highest MC our snapshots captured since `first_observed_at`, not a lifetime
+   high) **or** `HISTORICAL_VERIFIED` (CoinGecko historical market cap), **AND**
+   `GREATEST(observed_peak_market_cap, historical_peak_value) ≤ $200M`. The floor
+   is a **peak** rule — a token that dumped *below* $5M after an in-band peak
+   **stays qualified**. The ceiling is also on the peak — a token whose
+   verified/observed MC **ever exceeded $200M is excluded even if its current MC
+   is back in the band**; we never re-qualify on current MC alone.
+   **`HISTORICAL_ESTIMATE` (GeckoTerminal FDV basis = peak price × total supply)
+   does NOT qualify the main list** — it is an informational secondary signal,
+   stored (`tokens.historical_estimate_fdv_usd` + `historical_peak_evidences`)
+   and shown on the detail page as a clearly-labelled estimate, never a market
+   cap. `UNKNOWN` = no safe evidence, never "did not reach $5M". **FDV never
    substitutes for market cap** (market cap = price × *circulating* supply; FDV =
-   price × *total* supply). See *Historical Peak Qualification* in the Sprint 1
-   doc.
-4. Cross-chain candidate discovery.
+   price × *total* supply). Config: `MEMECOIN_OBSERVED_PEAK_MAX_USD=200000000`.
+   See *Historical Peak Qualification* in the Sprint 1 doc.
+4. Cross-chain candidate discovery (chains are whatever the trending metas /
+   activity feeds actually surface — never a hard-coded chain list).
 5. Basic market metrics (price, market cap, FDV, liquidity, volume, price change,
    chain, DEX).
 6. Persist each age-eligible observation (`tokens` + `market_snapshots`) so
@@ -416,9 +422,11 @@ In scope:
 
 Same pipeline runs two ways — HTTP `GET /api/memecoins/discover` (`trigger=manual`)
 and the scheduled command `php artisan memecoins:discover` (`trigger=scheduled`,
-every 10 min via Laravel's scheduler, `withoutOverlapping()`): DISCOVER → ENRICH →
-NORMALIZE → AGE FILTER → PERSIST TOKEN + SNAPSHOT → UPDATE OBSERVED PEAK →
-CURRENT OBSERVATION CHECK → HISTORICAL LOOKUP → QUALIFICATION → PERSIST EVIDENCE.
+every 10 min via Laravel's scheduler, `withoutOverlapping()`): DISCOVER (trending
+meta → profiles → boosts → keyword fallback) → PRE-FILTER (on meta market data,
+before enrichment) → DEDUPE → PRIORITIZE → ENRICH → NORMALIZE → AGE FILTER →
+PERSIST TOKEN + SNAPSHOT → UPDATE OBSERVED PEAK → CURRENT OBSERVATION CHECK →
+HISTORICAL LOOKUP → QUALIFICATION ($5M–$200M band) → PERSIST EVIDENCE.
 Each run is recorded in `ingestion_runs`. No queue / Redis / Horizon —
 synchronous execution. Details:
 [docs/sprint-1-discovery.md](docs/sprint-1-discovery.md).
@@ -440,28 +448,70 @@ Explicitly **excluded** from Sprint 1:
 - Docker Compose stack: **`postgres` + `backend` (HTTP API) + `scheduler`
   (`schedule:work`) + `frontend`**. `docker compose up -d` starts everything;
   the scheduler runs automatically. `GET /api/health` on the backend.
-- DexScreener discovery service implemented (`GET /api/memecoins/discover`):
-  discovers candidates from profiles / boosts / a budgeted **search-term engine**
-  (`SearchTermEngine`: core meme terms → trending-meta slugs → meta names →
-  ecosystem terms, deduped, capped at `MEMECOIN_SEARCH_TERM_BUDGET`=25), enriches
-  via `/token-pairs/v1`, normalizes, age-filters, and **persists** a `Token` +
-  `MarketSnapshot` per age-eligible token, maintaining `observed_peak_market_cap`.
-  Three separate ceilings: `MEMECOIN_DISCOVERY_CANDIDATE_CAP` (500 unique
-  candidates) → `MEMECOIN_MAX_ENRICH` (120 enriched) → `?limit=` (20 returned).
-  Deterministic pre-enrichment prioritization (source count → boost → profile
-  freshness → search hits → token key; **never market cap**). Coverage
-  diagnostics: `search_terms_*`, `discovery_source_counts`, `chains_discovered`
-  (counted from candidates actually seen), `candidate_cap_dropped`,
-  `selected_for_enrichment`.
+- **DexScreener discovery service — trending-meta-first (Step 19)**
+  (`GET /api/memecoins/discover`). Source priority: **1. Trending Meta** (the
+  documented `GET /metas/trending/v1` → `GET /metas/meta/v1/{slug}` narrative
+  APIs — `DexScreenerClient::trendingMetas()` / `metaBySlug()`; member pairs
+  become `trending_meta` candidates, up to `DEXSCREENER_TRENDING_META_LIMIT`=18
+  metas expanded), **2. Latest token profiles**, **3. Latest/top boosts**,
+  **4. Keyword search fallback** (`SearchTermEngine` — retained, **OFF by
+  default**, `MEMECOIN_KEYWORD_DISCOVERY_ENABLED=false`; supplemental long-tail
+  only, never primary). Toggles: `config('dexscreener.discovery_sources.*')` /
+  `DEXSCREENER_TRENDING_META_ENABLED` / `DEXSCREENER_PROFILES_ENABLED` /
+  `DEXSCREENER_BOOSTS_ENABLED`. **The undocumented `io.dexscreener.com` WebSocket
+  Trending table is NOT used** (Cloudflare-bot-walled, binary, versioned,
+  unsupported — see docs/trending-discovery-reconnaissance.md). Profiles/boosts
+  are secondary activity signals and must not outrank organic trending meta.
+  **PRE-FILTER** (on the free meta market data, *before* `/token-pairs/v1`
+  enrichment): `marketCap` present & > 0 & ≤ $200M; `volume.h24` > 0;
+  `liquidity.usd` > 0; `pairCreatedAt` present; loose pair age ≤ 35 d
+  (`MEMECOIN_PREFILTER_MAX_AGE_DAYS`, **performance only** — the strict age gate
+  still uses `earliest_pair_created_at` = `min(pairCreatedAt)` across *all* pairs
+  from full enrichment). **The $5M lower bound is NOT a pre-filter** (a token
+  currently below $5M may have an earlier qualifying peak). Candidates are
+  deduped, then enriched via `/token-pairs/v1`, normalized, age-filtered, and a
+  `Token` + `MarketSnapshot` is **persisted** per age-eligible token, maintaining
+  `observed_peak_market_cap`. The meta slug/name that surfaced a token is carried
+  as `discovery_context` (`{ trending_meta_slug, trending_meta_name,
+  trending_meta_count }`) in the discovery API response + diagnostics — no
+  `tokens` column. Candidate source tags union and are never overwritten
+  (`["trending_meta", "profile", "boost"]`). The **paid narrative-bar ad** is
+  ignored (rows with no chain/address/pair). Three separate ceilings:
+  `MEMECOIN_DISCOVERY_CANDIDATE_CAP` (500 unique candidates) → `MEMECOIN_MAX_ENRICH`
+  (120 enriched) → `?limit=` (20 returned). Deterministic pre-enrichment
+  prioritization: **1.** trending_meta source present, **2.** number of distinct
+  trending metas, **3.** profile signal, **4.** boost signal, **5.** search hits,
+  **6.** deterministic token key — **never market cap**. Representative pair =
+  highest `liquidity.usd` (unchanged). Coverage diagnostics: `trending_meta_*`
+  (`count` / `slugs_used` / `pairs_seen` / `unique_candidates` / `tokens_unique`
+  / `prefilter_dropped` / `prefilter_reasons` / `ad_or_malformed_skipped`),
+  `pre_filtered_candidates`, `deferred_candidates`, `keyword_discovery_enabled`,
+  `search_terms_*`, `discovery_source_counts` (`{ trending_meta, profile, boost,
+  search }`), `chains_discovered` (only chains actually observed),
+  `candidate_cap_dropped`, `selected_for_enrichment`,
+  `not_qualified_peak_above_ceiling`.
 - **`GET /api/memecoins/discovery-status`** — read-only coverage report,
   PostgreSQL (`ingestion_runs`) only, never calls DexScreener. Latest run
-  summary + latest completed run's discovery metrics + `chains_discovered` map.
+  summary + latest completed run's discovery metrics + `trending_meta` coverage
+  block (`meta_count` / `slugs_used` / `pairs_seen` / `unique_candidates`) +
+  `sources` (`discovery_source_counts`) + `pre_filtered_candidates` +
+  `chains_discovered` map. New `ingestion_runs` columns:
+  `trending_meta_count`, `trending_meta_pairs_seen`,
+  `trending_meta_unique_candidates`, `pre_filtered_candidates`,
+  `discovery_source_counts` (json), `trending_meta_slugs_used` (json).
 - **Historical qualification engine (Step 13C, Strategy D)** runs in the pipeline
   after the age filter: `CURRENT OBSERVATION CHECK → HISTORICAL LOOKUP →
   QUALIFICATION → PERSIST EVIDENCE`. A token qualifies for the **main list** when
-  age ≤ 30d **AND a VERIFIED / OBSERVED market cap has EVER reached $5M** — via
-  `CURRENT_OBSERVATION` (our own snapshot) or `HISTORICAL_VERIFIED` (CoinGecko
-  non-zero market-cap point). **`HISTORICAL_ESTIMATE`** (GeckoTerminal peak price
+  age ≤ 30d **AND a VERIFIED / OBSERVED market cap has EVER peaked inside the
+  `$5M`–`$200M` band** — via `CURRENT_OBSERVATION` (our own snapshot) or
+  `HISTORICAL_VERIFIED` (CoinGecko non-zero market-cap point), with
+  `GREATEST(observed_peak_market_cap, historical_peak_value) ≤ $200M`
+  (`HistoricalPeakEvidence::qualifies($min, $max)` + `peakAboveCeiling()`;
+  `MEMECOIN_OBSERVED_PEAK_MAX_USD`). A dump below $5M after an in-band peak stays
+  qualified; a peak that ever cleared $200M is excluded and is **not** re-qualified
+  on current MC (diagnostic `not_qualified_peak_above_ceiling`).
+  `HistoricalQualificationService` itself is unchanged — the ceiling is a
+  qualification-layer clause only. **`HISTORICAL_ESTIMATE`** (GeckoTerminal peak price
   × immutable total supply — an **FDV basis estimate, NOT a market cap**) is
   built and stored but **does NOT qualify the main list** — it mirrors to
   `tokens.historical_estimate_fdv_usd` (never `historical_peak_value`) and is an
@@ -479,18 +529,24 @@ Explicitly **excluded** from Sprint 1:
   in `docker compose logs scheduler`.
 - **Read API `GET /api/memecoins`** — read-only, PostgreSQL only, never calls
   DexScreener / CoinGecko / GeckoTerminal. Returns **only** tokens qualified by
-  `CURRENT_OBSERVATION` or `HISTORICAL_VERIFIED` (a verified/observed market cap
-  ≥ $5M). Each row carries `qualification_status` / `qualification_peak_value` /
+  `CURRENT_OBSERVATION` or `HISTORICAL_VERIFIED` with a verified/observed market
+  cap peak **in `[$5M, $200M]`** (`GREATEST(observed_peak, historical_peak_value)`
+  BETWEEN the two — a peak above $200M is excluded even when current MC is back in
+  band). Each row carries `qualification_status` / `qualification_peak_value` /
   `qualification_peak_at` / `qualification_source` / `qualification_basis` (always
   `current_market_cap` or `market_cap`, never `fdv_total_supply`) — kept DISTINCT
   from `observed_peak_market_cap`. **`HISTORICAL_ESTIMATE` and `UNKNOWN` are
-  excluded.** Sorted by `GREATEST(observed_peak, historical_peak_value)` DESC.
+  excluded.** `meta.filters` carries `observed_peak_market_cap_min_usd` +
+  `observed_peak_market_cap_max_usd`. Sorted by
+  `GREATEST(observed_peak, historical_peak_value)` DESC.
   `?chain=` / `?limit=` (default 20, max 50). ≤ 3 queries, no N+1.
 - **Detail API `GET /api/memecoins/{chainId}/{tokenAddress}`** — read-only,
   PostgreSQL only, never calls DexScreener / CoinGecko / GeckoTerminal. Identity
   is `(chain_id, token_address)`, never the symbol. **Nested response** (Step 15):
   `qualification` (MAIN-LIST qualification — `qualified` bool + `peak_value` = a
-  verified/observed market cap, `null` for `HISTORICAL_ESTIMATE`/`UNKNOWN`),
+  verified/observed market cap, `null` for `HISTORICAL_ESTIMATE`/`UNKNOWN`/
+  above-ceiling; `ineligible_reason: "peak_above_ceiling"` when a verified/observed
+  peak cleared $5M but exceeds $200M, else `null`),
   **`historical_estimate`** (Step 17-fix — an explicitly-named FDV-basis block:
   `estimated_fdv_usd` / `estimate_source` / `estimate_basis` /
   `estimate_confidence` + disclaimer; `null` unless a `HISTORICAL_ESTIMATE`

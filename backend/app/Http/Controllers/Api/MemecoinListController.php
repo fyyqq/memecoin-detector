@@ -23,11 +23,18 @@ class MemecoinListController extends Controller
      * runs discovery — the scheduled `memecoins:discover` command is the only
      * writer.
      *
-     * Qualified = age <= max_age_days AND a VERIFIED / OBSERVED market cap has
-     * EVER reached the threshold, via one of:
-     *   - observed_peak_market_cap >= threshold                     (CURRENT_OBSERVATION)
-     *   - historical_peak_status = HISTORICAL_VERIFIED
-     *       with historical_peak_value >= threshold                 (CoinGecko-verified)
+     * Qualified = age <= max_age_days AND a VERIFIED / OBSERVED market-cap peak
+     * that sits in [$5M, $200M]:
+     *   - the FLOOR is cleared by observed_peak_market_cap >= $5M
+     *     (CURRENT_OBSERVATION) or HISTORICAL_VERIFIED with
+     *     historical_peak_value >= $5M (CoinGecko-verified);
+     *   - the CEILING applies to the greatest verified/observed peak
+     *     (GREATEST(observed_peak, historical_peak_value)) <= $200M — a token
+     *     that ever printed a higher peak is excluded even if its current MC is
+     *     far lower.
+     *
+     * A token whose CURRENT MC has dumped below $5M STAYS in the list if it
+     * already cleared the floor — the lower bound is a peak rule.
      *
      * HISTORICAL_ESTIMATE (FDV basis) and UNKNOWN are NOT returned — an
      * estimated FDV is not a verified market cap. The estimate is still stored
@@ -45,6 +52,7 @@ class MemecoinListController extends Controller
 
         $maxAgeDays = (int) config('dexscreener.filters.max_age_days');
         $peakMin = (float) config('dexscreener.filters.observed_peak_market_cap_min_usd');
+        $peakMax = (float) config('dexscreener.filters.observed_peak_market_cap_max_usd');
         $maxLimit = (int) config('dexscreener.limits.max_result_limit');
         $defaultLimit = (int) config('dexscreener.limits.default_result_limit');
 
@@ -56,6 +64,7 @@ class MemecoinListController extends Controller
         $tokens = Token::query()
             ->whereNotNull('earliest_pair_created_at')
             ->where('earliest_pair_created_at', '>=', $ageCutoff)
+            // FLOOR — at least one verified/observed source cleared $5M.
             ->where(function (Builder $query) use ($peakMin): void {
                 // CURRENT_OBSERVATION — our own DexScreener snapshot saw MC >= $5M.
                 $query->where('observed_peak_market_cap', '>=', $peakMin)
@@ -67,6 +76,11 @@ class MemecoinListController extends Controller
                             ->where('historical_peak_value', '>=', $peakMin);
                     });
             })
+            // CEILING — the greatest verified/observed peak must be <= $200M.
+            ->whereRaw(
+                'GREATEST(COALESCE(observed_peak_market_cap, 0), COALESCE(historical_peak_value, 0)) <= ?',
+                [$peakMax],
+            )
             ->when($chain, fn ($query) => $query->where('chain_id', $chain))
             ->with(['latestSnapshot', 'historicalPeakEvidence'])
             ->orderByRaw('GREATEST(COALESCE(observed_peak_market_cap, 0), COALESCE(historical_peak_value, 0)) DESC')
@@ -80,6 +94,7 @@ class MemecoinListController extends Controller
                 'filters' => [
                     'max_age_days' => $maxAgeDays,
                     'observed_peak_market_cap_min_usd' => (int) $peakMin,
+                    'observed_peak_market_cap_max_usd' => (int) $peakMax,
                 ],
             ],
         ]);

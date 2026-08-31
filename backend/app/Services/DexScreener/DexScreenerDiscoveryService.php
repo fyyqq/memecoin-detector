@@ -16,18 +16,31 @@ use Illuminate\Support\Str;
 use Throwable;
 
 /**
- * Sprint 1 discovery pipeline:
+ * Sprint 1 discovery pipeline (Step 19 — trending-meta-first):
  *
- *   DISCOVER → ENRICH → NORMALIZE → AGE FILTER → CURRENT OBSERVATION CHECK
- *   → HISTORICAL LOOKUP → QUALIFICATION → PERSIST EVIDENCE → RETURN
+ *   DISCOVER → PRE-FILTER (trending-meta market data) → PRIORITIZE → ENRICH
+ *   → NORMALIZE → AGE FILTER → CURRENT OBSERVATION CHECK → HISTORICAL LOOKUP
+ *   → QUALIFICATION → PERSIST EVIDENCE → RETURN
  *
- * A token qualifies when age <= 30 days AND a VERIFIED / OBSERVED market cap has
- * EVER reached the threshold — proven by CURRENT_OBSERVATION (our own snapshot)
- * or HISTORICAL_VERIFIED (CoinGecko). HISTORICAL_ESTIMATE (GeckoTerminal FDV
- * basis) and UNKNOWN do NOT qualify — their evidence is still stored for
- * re-evaluation and shown as a secondary signal on the detail page.
+ * Discovery priority:
+ *   1. Trending Meta — `GET /metas/trending/v1` → `GET /metas/meta/v1/{slug}`
+ *      (documented; the ONLY primary source).
+ *   2. Latest token profiles.
+ *   3. Latest / top boosts.
+ *   4. Keyword search — SUPPLEMENTAL fallback, OFF by default.
  *
- * See docs/sprint-1-discovery.md and docs/historical-peak-reconnaissance.md.
+ * DexScreener's real per-pair Trending table (io.dexscreener.com WebSocket) is
+ * undocumented + Cloudflare-walled and is deliberately NOT used — see
+ * docs/trending-discovery-reconnaissance.md.
+ *
+ * A token qualifies for the main list when age <= 30 days AND a VERIFIED /
+ * OBSERVED market-cap peak sits in [$5M, $200M] — proven by CURRENT_OBSERVATION
+ * (our own snapshot) or HISTORICAL_VERIFIED (CoinGecko). HISTORICAL_ESTIMATE
+ * (FDV basis) and UNKNOWN do NOT qualify. A token whose CURRENT MC has dumped
+ * below $5M STAYS qualified if an earlier observation / historical evidence
+ * already cleared the floor.
+ *
+ * See docs/sprint-1-discovery.md.
  */
 class DexScreenerDiscoveryService
 {
@@ -94,6 +107,13 @@ class DexScreenerDiscoveryService
             'search_terms_used' => $diagnostics['search_terms_used'],
             'search_terms_with_results' => $diagnostics['search_terms_with_results'],
             'chains_discovered' => $diagnostics['chains_discovered'],
+            // Step 19 trending-meta coverage.
+            'trending_meta_count' => $diagnostics['trending_meta_count'],
+            'trending_meta_pairs_seen' => $diagnostics['trending_meta_pairs_seen'],
+            'trending_meta_unique_candidates' => $diagnostics['trending_meta_unique_candidates'],
+            'pre_filtered_candidates' => $diagnostics['pre_filtered_candidates'],
+            'discovery_source_counts' => $diagnostics['discovery_source_counts'],
+            'trending_meta_slugs_used' => $diagnostics['trending_meta_slugs_used'],
         ]);
 
         Log::info('Memecoin discovery run complete', ['ingestion_run_id' => $run->id] + $diagnostics);
@@ -104,8 +124,6 @@ class DexScreenerDiscoveryService
     /**
      * The discovery pipeline itself. Returns
      * `[list<QualifiedCandidate>, array diagnostics, list<array> notQualifiedSample]`.
-     * Diagnostics values are mostly ints; a few (`chains_discovered`,
-     * `discovery_source_counts`, `search_term_categories`) are `array<string,int>`.
      *
      * @return array{0:list<QualifiedCandidate>,1:array<string,mixed>,2:list<array<string,mixed>>}
      */
@@ -115,33 +133,66 @@ class DexScreenerDiscoveryService
         $chain = $chain !== null ? mb_strtolower(trim($chain)) : null;
 
         $peakMin = (float) config('dexscreener.filters.observed_peak_market_cap_min_usd');
+        $peakMax = (float) config('dexscreener.filters.observed_peak_market_cap_max_usd');
         $maxAgeDays = (int) config('dexscreener.filters.max_age_days');
         $maxEnrich = (int) config('dexscreener.limits.max_candidates_to_enrich');
         $candidateCap = (int) config('dexscreener.limits.discovery_candidate_cap');
         $limit ??= (int) config('dexscreener.limits.default_result_limit');
 
-        // 1. DISCOVER — build the search-term plan, then collect + dedupe hits.
-        $termPlan = $this->searchTerms->build();
-        $discovery = $this->collectCandidates($chain, $termPlan['terms']);
-        $rawCount = $discovery['raw_count'];
+        $trendingMetaEnabled = (bool) config('dexscreener.discovery_sources.trending_meta_enabled', true);
+        $profilesEnabled = (bool) config('dexscreener.discovery_sources.profiles_enabled', true);
+        $boostsEnabled = (bool) config('dexscreener.discovery_sources.boosts_enabled', true);
+        $keywordEnabled = (bool) config('dexscreener.discovery_sources.keyword_enabled', false);
+
+        // 1. DISCOVER --------------------------------------------------------
+        // Keyword search is a fallback only; its term plan is built (and the
+        // /metas/trending/v1 call it may make) only when it is enabled.
+        $termPlan = $keywordEnabled
+            ? $this->searchTerms->build()
+            : ['terms' => [], 'categories' => ['core' => 0, 'meta_slug' => 0, 'meta_name' => 0, 'ecosystem' => 0], 'budget' => 0, 'meta_terms_considered' => 0];
+
+        $discovery = $this->collectCandidates($chain, $termPlan['terms'], [
+            'trending_meta' => $trendingMetaEnabled,
+            'profiles' => $profilesEnabled,
+            'boosts' => $boostsEnabled,
+            'keyword' => $keywordEnabled,
+        ], $peakMax);
+
         $candidates = $discovery['candidates'];
         $termResults = $discovery['term_results'];
 
         $diagnostics = [
-            'raw_discovery_candidates' => $rawCount,
+            'raw_discovery_candidates' => $discovery['raw_count'],
             'unique_candidates' => count($candidates),
+            'pre_filtered_candidates' => count($candidates),
             'candidates_after_chain_filter' => count($candidates),
             'discovery_source_counts' => $discovery['source_counts'],
             'chains_discovered' => $discovery['chains'],
+
+            // Step 19 — trending-meta coverage.
+            'trending_meta_enabled' => $trendingMetaEnabled,
+            'trending_meta_count' => $discovery['trending']['meta_count'],
+            'trending_meta_slugs_used' => $discovery['trending']['slugs_used'],
+            'trending_meta_pairs_seen' => $discovery['trending']['pairs_seen'],
+            'trending_meta_prefilter_dropped' => $discovery['trending']['prefilter_dropped'],
+            'trending_meta_prefilter_reasons' => $discovery['trending']['prefilter_reasons'],
+            'trending_meta_ad_or_malformed_skipped' => $discovery['trending']['ad_or_malformed_skipped'],
+            'trending_meta_unique_candidates' => $discovery['source_counts']['trending_meta'] ?? 0,
+            'trending_meta_tokens_unique' => $discovery['source_counts']['trending_meta'] ?? 0,
+
+            // Keyword fallback.
+            'keyword_discovery_enabled' => $keywordEnabled,
             'search_terms_used' => count($termResults),
             'search_terms_with_results' => count(array_filter($termResults, static fn (int $n): bool => $n > 0)),
             'search_terms_empty' => count(array_filter($termResults, static fn (int $n): bool => $n === 0)),
             'search_term_categories' => $termPlan['categories'],
             'search_term_budget' => $termPlan['budget'],
+
             'discovery_candidate_cap' => $candidateCap,
             'candidate_cap_dropped' => 0,
             'candidates_considered' => 0,
             'selected_for_enrichment' => 0,
+            'deferred_candidates' => 0,
             'enrichment_deferred' => 0,
             'enrichment_attempted' => 0,
             'enriched_ok' => 0,
@@ -159,9 +210,9 @@ class DexScreenerDiscoveryService
             'qualified_from_current_observation' => 0,
             'not_qualified' => 0,
             'observed_peak_below_threshold' => 0,
-            // Age-eligible, has an FDV-basis estimate >= $5M, but no verified /
-            // observed market cap >= $5M — excluded from the main list (Step 17-fix).
             'not_qualified_fdv_estimate_only' => 0,
+            // Step 19 — cleared the floor but peaked above the $200M ceiling.
+            'not_qualified_peak_above_ceiling' => 0,
             // historical qualification (filled by HistoricalQualificationService)
             'historical_current_observation' => 0,
             'historical_verified' => 0,
@@ -174,21 +225,24 @@ class DexScreenerDiscoveryService
         ];
 
         // 1b. PRIORITIZE (deterministic) → CANDIDATE CAP → ENRICHMENT CAP.
-        // Market cap is NOT used here — it is unknown until enrichment.
+        // Market cap is NOT a prioritization signal.
         $ordered = $this->prioritizeCandidates($candidates);
 
         $diagnostics['candidate_cap_dropped'] = max(0, count($ordered) - $candidateCap);
         $considered = array_slice($ordered, 0, max(1, $candidateCap));
         $diagnostics['candidates_considered'] = count($considered);
 
-        // Every enriched, age-eligible candidate produces a stored observation,
-        // so enrich up to the hard ceiling regardless of the result `limit`.
         $toEnrich = array_slice($considered, 0, max(0, $maxEnrich));
+        $deferred = count($considered) - count($toEnrich);
         $diagnostics['selected_for_enrichment'] = count($toEnrich);
-        $diagnostics['enrichment_deferred'] = count($considered) - count($toEnrich);
+        $diagnostics['deferred_candidates'] = $deferred;
+        $diagnostics['enrichment_deferred'] = $deferred;
         $diagnostics['enrichment_attempted'] = count($toEnrich);
 
         // 2. ENRICH (bounded concurrent batch) + 3. NORMALIZE -------------
+        // Trending-meta candidates already carry market data, but token-level
+        // enrichment is still required for the all-pair earliest_pair_created_at,
+        // the representative pair, and identity normalization.
         $pairsByToken = $this->client->tokenPairsBatch(array_map(
             fn (array $c): array => ['chain_id' => $c['chain_id'], 'token_address' => $c['token_address']],
             $toEnrich,
@@ -207,6 +261,7 @@ class DexScreenerDiscoveryService
                 $pairs,
                 $candidate['sources'],
                 $now,
+                $this->discoveryContext($candidate),
             );
 
             if ($dto === null) {
@@ -220,12 +275,12 @@ class DexScreenerDiscoveryService
         }
 
         // 4. AGE FILTER → PERSIST TOKEN + SNAPSHOT + OBSERVED PEAK ---------
+        // FINAL age validation — always uses earliest_pair_created_at across ALL
+        // of the token's pairs, never a single meta pair's pairCreatedAt.
         /** @var list<array{token:Token,dto:TokenCandidateData,observation:RecordedObservation}> $ageEligible */
         $ageEligible = [];
 
         foreach ($normalized as $dto) {
-            // Age is the only pre-persistence gate. `pairCreatedAt` is DEX pool
-            // creation time, not token deployment — never guessed when null.
             if ($dto->earliestPairCreatedAt === null || $dto->ageDays === null) {
                 $diagnostics['age_unknown']++;
 
@@ -267,8 +322,6 @@ class DexScreenerDiscoveryService
         }
 
         // 5. CURRENT OBSERVATION CHECK → HISTORICAL LOOKUP → PERSIST EVIDENCE
-        // One evidence row per age-eligible token (upserted, re-evaluable).
-        // observed_peak_market_cap is never touched here.
         ['evidence' => $evidenceByToken, 'stats' => $histStats] = $this->historical->qualify(
             array_map(
                 static fn (array $e): array => [
@@ -285,7 +338,7 @@ class DexScreenerDiscoveryService
             $diagnostics[$key] = $value;
         }
 
-        // 6. QUALIFICATION -----------------------------------------------
+        // 6. QUALIFICATION — $5M <= qualifying peak <= $200M ------------------
         /** @var list<QualifiedCandidate> $qualified */
         $qualified = [];
         /** @var list<array<string,mixed>> $notQualifiedSample */
@@ -299,7 +352,7 @@ class DexScreenerDiscoveryService
             $evidence = $evidenceByToken[$token->id] ?? null;
             $status = $evidence?->status ?? HistoricalPeakEvidence::STATUS_UNKNOWN;
 
-            if ($evidence !== null && $evidence->qualifies($peakMin)) {
+            if ($evidence !== null && $evidence->qualifies($peakMin, $peakMax)) {
                 $diagnostics['qualified']++;
 
                 if ($status === HistoricalPeakEvidence::STATUS_CURRENT_OBSERVATION
@@ -327,8 +380,11 @@ class DexScreenerDiscoveryService
             $peak = $token->observed_peak_market_cap;
 
             $estimateOnly = $status === HistoricalPeakEvidence::STATUS_HISTORICAL_ESTIMATE;
+            $aboveCeiling = $evidence !== null && $evidence->peakAboveCeiling($peakMin, $peakMax);
 
-            if ($estimateOnly) {
+            if ($aboveCeiling) {
+                $diagnostics['not_qualified_peak_above_ceiling']++;
+            } elseif ($estimateOnly) {
                 $diagnostics['not_qualified_fdv_estimate_only']++;
             } elseif ($peak !== null) {
                 $diagnostics['observed_peak_below_threshold']++;
@@ -339,9 +395,8 @@ class DexScreenerDiscoveryService
                     'token_key' => $dto->tokenKey,
                     'chain_id' => $dto->chainId,
                     'symbol' => $dto->symbol,
-                    // Never claims the token has never crossed the threshold.
                     'reason' => match (true) {
-                        // FDV estimate >= $5M but no verified/observed market cap.
+                        $aboveCeiling => 'qualifying_peak_above_ceiling',
                         $estimateOnly => 'historical_fdv_estimate_only',
                         $peak === null => 'insufficient_historical_observation',
                         default => 'observed_peak_below_threshold',
@@ -350,12 +405,14 @@ class DexScreenerDiscoveryService
                     'current_market_cap' => $dto->marketCap,
                     'fdv' => $dto->fdv,
                     'observed_peak_market_cap' => $peak,
+                    'qualification_peak_value' => $evidence?->peak_value_usd,
                     'age_days' => $dto->ageDays,
+                    'sources' => $dto->sources,
                 ];
             }
         }
 
-        // Highest qualifying peak first (observed OR historical), then youngest.
+        // Highest qualifying peak first, then youngest.
         usort($qualified, function (QualifiedCandidate $a, QualifiedCandidate $b): int {
             $peakA = max($a->observedPeakMarketCap ?? 0.0, $a->qualificationPeakValue ?? 0.0);
             $peakB = max($b->observedPeakMarketCap ?? 0.0, $b->qualificationPeakValue ?? 0.0);
@@ -371,27 +428,33 @@ class DexScreenerDiscoveryService
     }
 
     /**
-     * Collect + de-duplicate raw discovery hits across all sources, tracking the
-     * per-candidate signals used for pre-enrichment prioritization plus coverage
-     * diagnostics (chains seen, per-term result counts, per-source counts).
+     * Collect + de-duplicate raw discovery hits across all enabled sources.
      *
-     * @param  list<string>  $terms  search terms from {@see SearchTermEngine}
+     * Trending-meta pairs are PRE-FILTERED here (before the expensive
+     * /token-pairs enrichment) on the market data the meta response already
+     * carries: marketCap present & > 0 & <= ceiling, volume.h24 > 0,
+     * liquidity.usd > 0, pairCreatedAt present, loose pair age <= 35 days. The
+     * $5M lower bound is NOT applied — it is a qualification-step peak rule.
+     *
+     * @param  list<string>  $terms  keyword-search terms (empty unless keyword discovery is enabled)
+     * @param  array{trending_meta:bool,profiles:bool,boosts:bool,keyword:bool}  $enabled
      * @return array{
-     *     raw_count: int,
-     *     candidates: array<string,array{chain_id:string,token_address:string,token_key:string,sources:list<string>,boost:bool,profile_rank:int,search_hits:int,order:int}>,
-     *     term_results: array<string,int>,
-     *     chains: array<string,int>,
-     *     source_counts: array{profile:int,boost:int,search:int}
+     *     raw_count:int,
+     *     candidates:array<string,array<string,mixed>>,
+     *     term_results:array<string,int>,
+     *     chains:array<string,int>,
+     *     source_counts:array<string,int>,
+     *     trending:array{meta_count:int,slugs_used:list<string>,pairs_seen:int,prefilter_dropped:int,prefilter_reasons:array<string,int>,ad_or_malformed_skipped:int}
      * }
      */
-    private function collectCandidates(?string $chain, array $terms): array
+    private function collectCandidates(?string $chain, array $terms, array $enabled, float $peakMax): array
     {
-        /** @var array<string,array{chain_id:string,token_address:string,token_key:string,sources:list<string>,boost:bool,profile_rank:int,search_hits:int,order:int}> $candidates */
+        /** @var array<string,array<string,mixed>> $candidates */
         $candidates = [];
         $rawCount = 0;
         $order = 0;
 
-        $add = function (?string $chainId, ?string $tokenAddress, string $source, ?int $profileRank = null) use (&$candidates, &$rawCount, &$order, $chain): void {
+        $add = function (?string $chainId, ?string $tokenAddress, string $source, array $opts = []) use (&$candidates, &$rawCount, &$order, $chain): void {
             $chainId = is_string($chainId) ? mb_strtolower(trim($chainId)) : '';
             $tokenAddress = is_string($tokenAddress) ? trim($tokenAddress) : '';
 
@@ -416,6 +479,8 @@ class DexScreenerDiscoveryService
                     'boost' => false,
                     'profile_rank' => PHP_INT_MAX,
                     'search_hits' => 0,
+                    // slug => name of every trending meta that surfaced the token.
+                    'trending_metas' => [],
                     'order' => $order++,
                 ];
             }
@@ -429,41 +494,118 @@ class DexScreenerDiscoveryService
                 'search' => $candidates[$key]['search_hits']++,
                 'profile' => $candidates[$key]['profile_rank'] = min(
                     $candidates[$key]['profile_rank'],
-                    $profileRank ?? PHP_INT_MAX,
+                    (int) ($opts['profile_rank'] ?? PHP_INT_MAX),
                 ),
+                'trending_meta' => isset($opts['meta_slug'])
+                    ? $candidates[$key]['trending_metas'][(string) $opts['meta_slug']] = (string) ($opts['meta_name'] ?? $opts['meta_slug'])
+                    : null,
                 default => null,
             };
         };
 
-        // A. latest token profiles — list position is a freshness signal.
-        foreach (array_values($this->client->latestTokenProfiles()) as $i => $row) {
-            $add($row['chainId'] ?? null, $row['tokenAddress'] ?? null, 'profile', $i);
+        // A. TRENDING META (primary) — /metas/trending/v1 → /metas/meta/v1/{slug}.
+        $trending = [
+            'meta_count' => 0,
+            'slugs_used' => [],
+            'pairs_seen' => 0,
+            'prefilter_dropped' => 0,
+            'prefilter_reasons' => [],
+            'ad_or_malformed_skipped' => 0,
+        ];
+
+        if ($enabled['trending_meta']) {
+            $metaLimit = max(0, (int) config('dexscreener.discovery_sources.trending_meta_limit', 18));
+            $prefilterMaxAgeDays = (int) config('dexscreener.filters.prefilter_max_age_days', 35);
+            $now = CarbonImmutable::now();
+
+            $selected = [];
+            foreach ($this->client->trendingMetas() as $meta) {
+                if (count($selected) >= $metaLimit) {
+                    break;
+                }
+                $slug = is_array($meta) && is_string($meta['slug'] ?? null) ? trim($meta['slug']) : '';
+                if ($slug === '') {
+                    continue;
+                }
+                $selected[$slug] = is_string($meta['name'] ?? null) ? trim($meta['name']) : $slug;
+            }
+
+            $trending['meta_count'] = count($selected);
+            $trending['slugs_used'] = array_keys($selected);
+
+            foreach ($selected as $slug => $listName) {
+                $detail = $this->client->metaBySlug($slug);
+                $metaName = is_string($detail['name'] ?? null) && $detail['name'] !== '' ? $detail['name'] : $listName;
+                $pairs = is_array($detail['pairs'] ?? null) ? $detail['pairs'] : [];
+
+                foreach ($pairs as $pair) {
+                    if (! is_array($pair)) {
+                        continue;
+                    }
+                    $trending['pairs_seen']++;
+
+                    $base = is_array($pair['baseToken'] ?? null) ? $pair['baseToken'] : [];
+                    $chainId = is_string($pair['chainId'] ?? null) ? $pair['chainId'] : null;
+                    $addr = is_string($base['address'] ?? null) ? $base['address'] : null;
+                    $pairAddress = $pair['pairAddress'] ?? null;
+
+                    // Defensive: the documented /metas/meta response never carries
+                    // the narrative-bar ad, but reject anything that is not a
+                    // real member pair so paid placement can never leak in.
+                    if ($chainId === null || $addr === null || ! is_string($pairAddress) || $pairAddress === '') {
+                        $trending['ad_or_malformed_skipped']++;
+
+                        continue;
+                    }
+
+                    $reason = $this->prefilterReason($pair, $now, $peakMax, $prefilterMaxAgeDays);
+                    if ($reason !== null) {
+                        $trending['prefilter_dropped']++;
+                        $trending['prefilter_reasons'][$reason] = ($trending['prefilter_reasons'][$reason] ?? 0) + 1;
+
+                        continue;
+                    }
+
+                    $add($chainId, $addr, 'trending_meta', ['meta_slug' => $slug, 'meta_name' => $metaName]);
+                }
+            }
         }
 
-        // B. latest token boosts + C. top token boosts
-        foreach ($this->client->latestTokenBoosts() as $row) {
-            $add($row['chainId'] ?? null, $row['tokenAddress'] ?? null, 'boost');
-        }
-        foreach ($this->client->topTokenBoosts() as $row) {
-            $add($row['chainId'] ?? null, $row['tokenAddress'] ?? null, 'boost');
+        // B. LATEST TOKEN PROFILES — list position is a freshness signal.
+        if ($enabled['profiles']) {
+            foreach (array_values($this->client->latestTokenProfiles()) as $i => $row) {
+                $add($row['chainId'] ?? null, $row['tokenAddress'] ?? null, 'profile', ['profile_rank' => $i]);
+            }
         }
 
-        // D. curated + trending-meta + ecosystem search terms.
+        // C. LATEST + TOP BOOSTS (paid). Never allowed to out-priority trending meta.
+        if ($enabled['boosts']) {
+            foreach ($this->client->latestTokenBoosts() as $row) {
+                $add($row['chainId'] ?? null, $row['tokenAddress'] ?? null, 'boost');
+            }
+            foreach ($this->client->topTokenBoosts() as $row) {
+                $add($row['chainId'] ?? null, $row['tokenAddress'] ?? null, 'boost');
+            }
+        }
+
+        // D. KEYWORD SEARCH — supplemental fallback only.
         /** @var array<string,int> $termResults */
         $termResults = [];
-        foreach ($terms as $term) {
-            $pairs = $this->client->search($term);
-            $termResults[$term] = count($pairs);
+        if ($enabled['keyword']) {
+            foreach ($terms as $term) {
+                $pairs = $this->client->search($term);
+                $termResults[$term] = count($pairs);
 
-            foreach ($pairs as $pair) {
-                $base = is_array($pair['baseToken'] ?? null) ? $pair['baseToken'] : [];
-                $add($pair['chainId'] ?? null, $base['address'] ?? null, 'search');
+                foreach ($pairs as $pair) {
+                    $base = is_array($pair['baseToken'] ?? null) ? $pair['baseToken'] : [];
+                    $add($pair['chainId'] ?? null, $base['address'] ?? null, 'search');
+                }
             }
         }
 
         // Coverage aggregates over the UNIQUE candidate set.
         $chains = [];
-        $sourceCounts = ['profile' => 0, 'boost' => 0, 'search' => 0];
+        $sourceCounts = ['trending_meta' => 0, 'profile' => 0, 'boost' => 0, 'search' => 0];
 
         foreach ($candidates as $candidate) {
             $chains[$candidate['chain_id']] = ($chains[$candidate['chain_id']] ?? 0) + 1;
@@ -481,19 +623,88 @@ class DexScreenerDiscoveryService
             'term_results' => $termResults,
             'chains' => $chains,
             'source_counts' => $sourceCounts,
+            'trending' => $trending,
         ];
     }
 
     /**
-     * Deterministic pre-enrichment ranking. Reproducible (no rotation).
-     * **Market cap is deliberately NOT used** — it is unknown before enrichment.
+     * Pre-filter one trending-meta pair on the market data it already carries.
+     * Returns a drop reason, or null if it survives. The $5M lower bound is
+     * deliberately NOT checked here.
      *
-     * Priority (all descending "goodness"):
-     *   1. number of discovery sources
-     *   2. boost signal present
-     *   3. profile freshness (list position; "no profile" ranks last)
-     *   4. search occurrence count
-     *   5. token key, ascending — a total, stable tie-break
+     * @param  array<string,mixed>  $pair
+     */
+    private function prefilterReason(array $pair, CarbonImmutable $now, float $peakMax, int $maxAgeDays): ?string
+    {
+        $marketCap = $this->floatOrNull($pair['marketCap'] ?? null);
+        if ($marketCap === null || $marketCap <= 0.0) {
+            return 'market_cap_missing_or_zero';
+        }
+        if ($marketCap > $peakMax) {
+            // Current MC alone already exceeds the ceiling — the peak can only be
+            // higher, so it can never satisfy the max-peak rule.
+            return 'market_cap_above_ceiling';
+        }
+
+        $liquidity = is_array($pair['liquidity'] ?? null) ? $pair['liquidity'] : [];
+        if (($this->floatOrNull($liquidity['usd'] ?? null) ?? 0.0) <= 0.0) {
+            return 'liquidity_zero';
+        }
+
+        $volume = is_array($pair['volume'] ?? null) ? $pair['volume'] : [];
+        if (($this->floatOrNull($volume['h24'] ?? null) ?? 0.0) <= 0.0) {
+            return 'volume_zero';
+        }
+
+        $createdMs = $this->intOrNull($pair['pairCreatedAt'] ?? null);
+        if ($createdMs === null || $createdMs <= 0) {
+            return 'pair_created_at_missing';
+        }
+
+        $ageDays = ($now->getTimestampMs() - $createdMs) / 86_400_000;
+        if ($ageDays > $maxAgeDays) {
+            return 'loose_age_exceeded';
+        }
+
+        return null;
+    }
+
+    /**
+     * Small provenance block for a candidate surfaced by a trending meta.
+     *
+     * @param  array<string,mixed>  $candidate
+     * @return array<string,mixed>|null
+     */
+    private function discoveryContext(array $candidate): ?array
+    {
+        /** @var array<string,string> $metas */
+        $metas = $candidate['trending_metas'] ?? [];
+
+        if ($metas === []) {
+            return null;
+        }
+
+        $slug = array_key_first($metas);
+
+        return [
+            'trending_meta_slug' => $slug,
+            'trending_meta_name' => $metas[$slug],
+            'trending_meta_count' => count($metas),
+        ];
+    }
+
+    /**
+     * Deterministic pre-enrichment ranking (Step 19). Reproducible (no
+     * randomness / no wall-clock). **Market cap is not a signal.** Priority,
+     * all descending "goodness":
+     *
+     *   1. surfaced by a trending meta at all
+     *   2. number of distinct trending metas that surfaced it
+     *   3. profile signal present
+     *   4. boost signal present
+     *   5. keyword-search occurrence count
+     *   6. profile freshness (list position) — a stable secondary tie-break
+     *   7. token key, ascending — total, stable final tie-break
      *
      * @param  array<string,array<string,mixed>>  $candidates
      * @return list<array<string,mixed>>
@@ -502,16 +713,18 @@ class DexScreenerDiscoveryService
     {
         $ordered = array_values($candidates);
 
-        $freshness = static fn (array $c): int => $c['profile_rank'] === PHP_INT_MAX
+        $freshness = static fn (array $c): int => ($c['profile_rank'] ?? PHP_INT_MAX) === PHP_INT_MAX
             ? -1
             : PHP_INT_MAX - (int) $c['profile_rank'];
 
         usort($ordered, static function (array $a, array $b) use ($freshness): int {
             $score = static fn (array $c): array => [
-                count($c['sources']),
+                in_array('trending_meta', $c['sources'], true) ? 1 : 0,
+                count($c['trending_metas'] ?? []),
+                in_array('profile', $c['sources'], true) ? 1 : 0,
                 $c['boost'] ? 1 : 0,
-                $freshness($c),
                 $c['search_hits'],
+                $freshness($c),
             ];
 
             return ($score($b) <=> $score($a))
@@ -519,5 +732,32 @@ class DexScreenerDiscoveryService
         });
 
         return $ordered;
+    }
+
+    private function floatOrNull(mixed $value): ?float
+    {
+        if (is_int($value) || is_float($value)) {
+            return (float) $value;
+        }
+        if (is_string($value) && is_numeric(trim($value))) {
+            return (float) trim($value);
+        }
+
+        return null;
+    }
+
+    private function intOrNull(mixed $value): ?int
+    {
+        if (is_int($value)) {
+            return $value;
+        }
+        if (is_float($value)) {
+            return (int) $value;
+        }
+        if (is_string($value) && is_numeric(trim($value))) {
+            return (int) round((float) trim($value));
+        }
+
+        return null;
     }
 }

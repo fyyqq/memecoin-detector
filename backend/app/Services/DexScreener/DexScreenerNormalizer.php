@@ -22,6 +22,7 @@ class DexScreenerNormalizer
     /**
      * @param  list<array<string,mixed>>  $pairs  Raw pair objects for this token.
      * @param  list<string>  $sources  Discovery sources that surfaced the token.
+     * @param  array<string,mixed>|null  $discoveryContext  Small provenance block (e.g. trending-meta slug/name).
      */
     public function normalize(
         string $chainId,
@@ -29,6 +30,7 @@ class DexScreenerNormalizer
         array $pairs,
         array $sources,
         ?CarbonImmutable $now = null,
+        ?array $discoveryContext = null,
     ): ?TokenCandidateData {
         $now ??= CarbonImmutable::now();
 
@@ -88,6 +90,7 @@ class DexScreenerNormalizer
             retrievedAt: $now,
             sizeBasis: $this->sizeBasis($marketCap, $fdv),
             links: $this->links($primary['info'] ?? null),
+            discoveryContext: $discoveryContext,
         );
     }
 

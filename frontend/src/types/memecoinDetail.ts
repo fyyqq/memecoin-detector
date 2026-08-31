@@ -5,12 +5,12 @@ export type QualificationStatus =
   | 'HISTORICAL_ESTIMATE'
   | 'UNKNOWN'
 
-/** `data.qualification` — MAIN-LIST qualification (verified/observed market cap only). */
+/** `data.qualification` — MAIN-LIST qualification (verified/observed market cap in $5M–$200M). */
 export interface MemecoinQualification {
   status: QualificationStatus
-  /** true only for CURRENT_OBSERVATION / HISTORICAL_VERIFIED clearing $5M. */
+  /** true only for CURRENT_OBSERVATION / HISTORICAL_VERIFIED with a peak in [$5M, $200M]. */
   qualified: boolean
-  /** The qualifying VERIFIED/OBSERVED market cap. Null for HISTORICAL_ESTIMATE and UNKNOWN — never an FDV estimate. */
+  /** The qualifying VERIFIED/OBSERVED market cap. Null for HISTORICAL_ESTIMATE / UNKNOWN / above-ceiling — never an FDV estimate. */
   peak_value: number | null
   peak_at: string | null
   /** dexscreener | coingecko | null */
@@ -19,6 +19,8 @@ export interface MemecoinQualification {
   basis: string | null
   /** high | medium | low | null */
   confidence: string | null
+  /** "peak_above_ceiling" when a verified/observed peak cleared $5M but exceeds $200M; else null. */
+  ineligible_reason: string | null
 }
 
 /**

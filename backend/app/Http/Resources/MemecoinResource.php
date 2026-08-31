@@ -84,9 +84,10 @@ class MemecoinResource extends JsonResource
         /** @var HistoricalPeakEvidence|null $evidence */
         $evidence = $this->historicalPeakEvidence;
 
-        $threshold = (float) config('dexscreener.filters.observed_peak_market_cap_min_usd');
+        $min = (float) config('dexscreener.filters.observed_peak_market_cap_min_usd');
+        $max = (float) config('dexscreener.filters.observed_peak_market_cap_max_usd');
 
-        if ($evidence !== null && $evidence->qualifies($threshold)) {
+        if ($evidence !== null && $evidence->qualifies($min, $max)) {
             return [
                 'status' => $evidence->status,
                 'peak_value' => $evidence->peak_value_usd,
@@ -96,7 +97,9 @@ class MemecoinResource extends JsonResource
             ];
         }
 
-        if ($this->observed_peak_market_cap !== null && $this->observed_peak_market_cap >= $threshold) {
+        if ($this->observed_peak_market_cap !== null
+            && $this->observed_peak_market_cap >= $min
+            && $this->observed_peak_market_cap <= $max) {
             return [
                 'status' => HistoricalPeakEvidence::STATUS_CURRENT_OBSERVATION,
                 'peak_value' => $this->observed_peak_market_cap,
@@ -111,7 +114,8 @@ class MemecoinResource extends JsonResource
         // holds a verified/observed market cap.
         if ($this->historical_peak_status === HistoricalPeakEvidence::STATUS_HISTORICAL_VERIFIED
             && $this->historical_peak_value !== null
-            && $this->historical_peak_value >= $threshold) {
+            && $this->historical_peak_value >= $min
+            && $this->historical_peak_value <= $max) {
             return [
                 'status' => HistoricalPeakEvidence::STATUS_HISTORICAL_VERIFIED,
                 'peak_value' => $this->historical_peak_value,

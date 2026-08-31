@@ -97,16 +97,38 @@ class HistoricalPeakEvidence extends Model
     }
 
     /**
-     * Does this evidence qualify the token for the main ≥ $5M universe? True
-     * only for a VERIFIED / OBSERVED market cap (CURRENT_OBSERVATION or
-     * HISTORICAL_VERIFIED) that clears the threshold. An FDV-basis estimate
-     * never qualifies.
+     * Does this evidence qualify the token for the main bounded market-cap
+     * universe? True only for a VERIFIED / OBSERVED market cap
+     * (CURRENT_OBSERVATION or HISTORICAL_VERIFIED) whose peak sits in
+     * `[$min, $max]`. An FDV-basis estimate never qualifies.
+     *
+     * `$max` defaults to null (no ceiling) so existing single-argument callers
+     * keep the old "peak >= floor" behaviour.
      */
-    public function qualifies(float $threshold): bool
+    public function qualifies(float $min, ?float $max = null): bool
+    {
+        if (! in_array($this->status, self::QUALIFYING_STATUSES, true) || $this->peak_value_usd === null) {
+            return false;
+        }
+
+        if ($this->peak_value_usd < $min) {
+            return false;
+        }
+
+        return $max === null || $this->peak_value_usd <= $max;
+    }
+
+    /**
+     * A verified/observed market cap that cleared the floor but whose peak
+     * exceeds the ceiling — i.e. it qualified once but is now outside the
+     * requested $5M–$200M universe.
+     */
+    public function peakAboveCeiling(float $min, float $max): bool
     {
         return in_array($this->status, self::QUALIFYING_STATUSES, true)
             && $this->peak_value_usd !== null
-            && $this->peak_value_usd >= $threshold;
+            && $this->peak_value_usd >= $min
+            && $this->peak_value_usd > $max;
     }
 
     /**

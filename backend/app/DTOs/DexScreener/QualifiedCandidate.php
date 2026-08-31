@@ -75,6 +75,7 @@ final readonly class QualifiedCandidate
 
             'size_basis' => $c->sizeBasis,
             'sources' => $c->sources,
+            'discovery_context' => $c->discoveryContext,
             'data_source' => $c->dataSource,
             'retrieved_at' => $c->retrievedAt->toIso8601String(),
         ];

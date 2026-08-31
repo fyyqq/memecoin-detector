@@ -68,6 +68,30 @@ class DexScreenerClient
     }
 
     /**
+     * One trending meta plus its member pairs (`/metas/meta/v1/{slug}`). The
+     * `pairs` array holds full pair objects (marketCap, liquidity, volume,
+     * pairCreatedAt, …) — usable directly as pre-filterable discovery candidates.
+     *
+     * Returns `[]` on any failure so the pipeline degrades to its other sources.
+     *
+     * @return array<string,mixed> { slug, name, marketCap, …, pairs: [...] }
+     */
+    public function metaBySlug(string $slug): array
+    {
+        $slug = trim($slug);
+
+        if ($slug === '') {
+            return [];
+        }
+
+        return $this->cachedGet(
+            'dexscreener:metas:meta:'.md5(mb_strtolower($slug)),
+            $this->discoveryTtl,
+            '/metas/meta/v1/'.rawurlencode($slug),
+        );
+    }
+
+    /**
      * Free-text pair search. Returns the `pairs` array (≤ ~30, mixed chains).
      *
      * @return list<array<string,mixed>>

@@ -31,6 +31,7 @@ class MemecoinListTest extends TestCase
 
         config()->set('dexscreener.filters.max_age_days', 30);
         config()->set('dexscreener.filters.observed_peak_market_cap_min_usd', 5_000_000);
+        config()->set('dexscreener.filters.observed_peak_market_cap_max_usd', 200_000_000);
         config()->set('dexscreener.limits.default_result_limit', 20);
         config()->set('dexscreener.limits.max_result_limit', 50);
     }
@@ -340,6 +341,7 @@ class MemecoinListTest extends TestCase
                 'filters' => [
                     'max_age_days' => 30,
                     'observed_peak_market_cap_min_usd' => 5000000,
+                    'observed_peak_market_cap_max_usd' => 200000000,
                 ],
             ],
         ]);

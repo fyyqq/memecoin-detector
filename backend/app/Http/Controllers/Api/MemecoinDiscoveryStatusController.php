@@ -35,12 +35,14 @@ class MemecoinDiscoveryStatusController extends Controller
                     ? null
                     : $this->runSummary($latestCompleted),
                 'discovery' => $this->discovery($latestCompleted),
+                'trending_meta' => $this->trendingMeta($latestCompleted),
+                'sources' => $latestCompleted?->discovery_source_counts ?? new \stdClass,
                 'chains' => $latestCompleted?->chains_discovered ?? new \stdClass,
             ],
             'meta' => [
                 'retrieved_at' => CarbonImmutable::now()->toIso8601String(),
                 'source' => 'ingestion_runs',
-                'coverage_note' => 'Activity- and keyword-driven sample across chains; not an exhaustive token census.',
+                'coverage_note' => 'Trending-meta-first sample across chains (documented /metas/* API); the real DexScreener per-pair Trending WebSocket is not used. Not an exhaustive token census.',
             ],
         ]);
     }
@@ -75,6 +77,7 @@ class MemecoinDiscoveryStatusController extends Controller
         return [
             'raw_candidates' => $run->raw_candidates,
             'unique_candidates' => $run->unique_candidates,
+            'pre_filtered_candidates' => $run->pre_filtered_candidates,
             'selected_for_enrichment' => $run->selected_for_enrichment,
             'candidate_cap_dropped' => $run->candidate_cap_dropped,
             'enriched_candidates' => $run->enriched_candidates,
@@ -83,6 +86,23 @@ class MemecoinDiscoveryStatusController extends Controller
             'qualified' => $run->qualified,
             'search_terms_used' => $run->search_terms_used,
             'search_terms_with_results' => $run->search_terms_with_results,
+        ];
+    }
+
+    /**
+     * @return array<string,mixed>|null
+     */
+    private function trendingMeta(?IngestionRun $run): ?array
+    {
+        if ($run === null) {
+            return null;
+        }
+
+        return [
+            'meta_count' => $run->trending_meta_count,
+            'slugs_used' => $run->trending_meta_slugs_used ?? [],
+            'pairs_seen' => $run->trending_meta_pairs_seen,
+            'unique_candidates' => $run->trending_meta_unique_candidates,
         ];
     }
 }

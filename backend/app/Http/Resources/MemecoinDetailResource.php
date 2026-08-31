@@ -131,27 +131,30 @@ class MemecoinDetailResource extends JsonResource
     /**
      * The token's MAIN-LIST qualification.
      *
-     *   qualified = true  only for a VERIFIED / OBSERVED market cap that clears
-     *                     the threshold (CURRENT_OBSERVATION or HISTORICAL_VERIFIED).
+     *   qualified = true  only for a VERIFIED / OBSERVED market-cap peak in
+     *                     [$5M, $200M] (CURRENT_OBSERVATION or HISTORICAL_VERIFIED).
      *   peak_value        the qualifying market cap — NEVER an FDV estimate; null
-     *                     for HISTORICAL_ESTIMATE and UNKNOWN.
+     *                     for HISTORICAL_ESTIMATE / UNKNOWN / above-ceiling.
      *   status            the raw evidence label (all four possible on the detail
      *                     page); UNKNOWN means "not verified", NOT "never reached
      *                     the threshold".
+     *   ineligible_reason "peak_above_ceiling" when a verified/observed peak
+     *                     cleared $5M but exceeds $200M; null otherwise.
      *
      * The FDV estimate, if any, is reported separately in `historical_estimate`.
      *
-     * @return array{status:string,qualified:bool,peak_value:?float,peak_at:?string,source:?string,basis:?string,confidence:?string}
+     * @return array{status:string,qualified:bool,peak_value:?float,peak_at:?string,source:?string,basis:?string,confidence:?string,ineligible_reason:?string}
      */
     private function qualification(): array
     {
         /** @var HistoricalPeakEvidence|null $evidence */
         $evidence = $this->historicalPeakEvidence;
 
-        $threshold = (float) config('dexscreener.filters.observed_peak_market_cap_min_usd');
+        $min = (float) config('dexscreener.filters.observed_peak_market_cap_min_usd');
+        $max = (float) config('dexscreener.filters.observed_peak_market_cap_max_usd');
 
-        // Verified/observed market-cap qualification.
-        if ($evidence !== null && $evidence->qualifies($threshold)) {
+        // Verified/observed market-cap qualification (peak in [$5M, $200M]).
+        if ($evidence !== null && $evidence->qualifies($min, $max)) {
             return [
                 'status' => $evidence->status,
                 'qualified' => true,
@@ -160,11 +163,14 @@ class MemecoinDetailResource extends JsonResource
                 'source' => $evidence->evidence_source,
                 'basis' => $evidence->evidence_basis,
                 'confidence' => $evidence->confidence,
+                'ineligible_reason' => null,
             ];
         }
 
         // Derived CURRENT_OBSERVATION when there is no evidence row yet.
-        if ($this->observed_peak_market_cap !== null && $this->observed_peak_market_cap >= $threshold) {
+        if ($this->observed_peak_market_cap !== null
+            && $this->observed_peak_market_cap >= $min
+            && $this->observed_peak_market_cap <= $max) {
             return [
                 'status' => HistoricalPeakEvidence::STATUS_CURRENT_OBSERVATION,
                 'qualified' => true,
@@ -173,12 +179,16 @@ class MemecoinDetailResource extends JsonResource
                 'source' => HistoricalPeakEvidence::SOURCE_DEXSCREENER,
                 'basis' => HistoricalPeakEvidence::BASIS_CURRENT_MARKET_CAP,
                 'confidence' => 'high',
+                'ineligible_reason' => null,
             ];
         }
 
-        // Not qualified for the main list. Keep the raw status
-        // (HISTORICAL_ESTIMATE / UNKNOWN) but expose NO market-cap value here —
-        // an FDV estimate is never a qualification market cap.
+        // Not qualified for the main list. Expose NO market-cap value here (an
+        // FDV estimate is never a qualification market cap). Flag the
+        // above-ceiling case so the reason is not silent.
+        $aboveCeiling = ($evidence !== null && $evidence->peakAboveCeiling($min, $max))
+            || ($this->observed_peak_market_cap !== null && $this->observed_peak_market_cap > $max);
+
         return [
             'status' => $evidence?->status ?? HistoricalPeakEvidence::STATUS_UNKNOWN,
             'qualified' => false,
@@ -187,6 +197,7 @@ class MemecoinDetailResource extends JsonResource
             'source' => null,
             'basis' => null,
             'confidence' => null,
+            'ineligible_reason' => $aboveCeiling ? 'peak_above_ceiling' : null,
         ];
     }
 

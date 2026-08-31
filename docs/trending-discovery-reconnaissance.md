@@ -1,9 +1,13 @@
 # Trending Discovery Reconnaissance
 
-**Status:** research / reconnaissance only. **No production code, no migrations,
-no DB, no scheduler, no React, no historical/pump/evidence/AI changes, no new
-providers.** Nothing here is implemented.
-**Date performed:** 2026-08-31
+**Status:** reconnaissance complete → **implemented in Step 19.** The recommended
+path (Option B — trending-metas-first on the documented REST API, keyword search
+demoted to an off-by-default fallback, `$5M–$200M` peak band, WebSocket Trending
+table NOT used) is now the live discovery architecture. See
+[sprint-1-discovery.md](sprint-1-discovery.md) → "Discovery sources (Step 19 —
+trending-meta-first)" for the shipped design. This document is preserved as the
+research record that motivated the change.
+**Date performed:** 2026-08-31 · **Implemented:** Step 19 (2026-08-31)
 **Investigator method:** live `curl` against `api.dexscreener.com` /
 `io.dexscreener.com`; headless-Chrome page loads of `dexscreener.com` with full
 network-log capture; the official docs at `https://docs.dexscreener.com/api/reference`.
@@ -385,6 +389,15 @@ The literal requirement ("`5M ≤ market_cap ≤ 200M`", "observed market cap") 
 as **A**. Reading **B** better matches "show me mid-cap memecoins right now".
 Flag for the user; the recon does not decide it.
 
+> **Resolved in Step 19: Reading A.** The band is applied to the qualifying peak
+> — `GREATEST(observed_peak_market_cap, historical_peak_value)` must be
+> `≤ $200M`. A token that ever printed above $200M is excluded even if its
+> current MC has fallen back into the band ("do not re-qualify on current MC").
+> A token that dumped *below* $5M after an in-band peak stays qualified.
+> Implemented as `HistoricalPeakEvidence::qualifies($min, $max)` +
+> `peakAboveCeiling()`, the `MemecoinListController` query, and both API
+> resources. `MEMECOIN_OBSERVED_PEAK_MAX_USD=200000000`.
+
 Mechanically this is **one extra clause** in the existing qualification check
 (`… AND peak_value ≤ 200_000_000`) plus the volume/liquidity gates in the age
 filter — no schema change.
@@ -504,6 +517,14 @@ existing qualification pipeline unchanged.
 **Recommended path: Option B** — documented REST + the documented `/metas/*`
 "website data" endpoints; **no** undocumented WS, **no** browser automation, **no**
 new provider. Keep the existing keyword engine as an off-by-default fallback.
+
+> **Shipped in Step 19.** Option B is the live architecture: `DexScreenerClient::metaBySlug()`
+> + `trendingMetas()` drive `DexScreenerDiscoveryService::collectCandidates()`
+> source A (`trending_meta`), with profiles/boosts as secondary activity signals
+> and `SearchTermEngine` retained but gated behind
+> `MEMECOIN_KEYWORD_DISCOVERY_ENABLED=false`. Pre-filter, `$5M–$200M` peak band,
+> and `discovery_context` (surfacing meta slug/name) are all in place. The
+> undocumented WebSocket is not referenced anywhere in the codebase.
 
 ---
 

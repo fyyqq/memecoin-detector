@@ -44,6 +44,13 @@ class IngestionRun extends Model
         'search_terms_used',
         'search_terms_with_results',
         'chains_discovered',
+        // Step 19 trending-meta coverage metrics.
+        'trending_meta_count',
+        'trending_meta_pairs_seen',
+        'trending_meta_unique_candidates',
+        'pre_filtered_candidates',
+        'discovery_source_counts',
+        'trending_meta_slugs_used',
     ];
 
     protected function casts(): array
@@ -52,6 +59,8 @@ class IngestionRun extends Model
             'started_at' => 'immutable_datetime',
             'completed_at' => 'immutable_datetime',
             'chains_discovered' => 'array',
+            'discovery_source_counts' => 'array',
+            'trending_meta_slugs_used' => 'array',
         ];
     }
 }

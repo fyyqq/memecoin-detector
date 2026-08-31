@@ -17,8 +17,9 @@ use Carbon\CarbonImmutable;
 final readonly class TokenCandidateData
 {
     /**
-     * @param  list<string>  $sources  Discovery sources that surfaced this token (e.g. ["profile", "search"]).
+     * @param  list<string>  $sources  Discovery sources that surfaced this token (e.g. ["trending_meta", "profile"]).
      * @param  'market_cap'|'fdv'|'unknown'  $sizeBasis  Which size metric satisfied (or would satisfy) the >= $5M rule.
+     * @param  array<string,mixed>|null  $discoveryContext  Small provenance block, e.g. { trending_meta_slug, trending_meta_name, trending_meta_count }.
      */
     public function __construct(
         public string $tokenKey,
@@ -45,6 +46,7 @@ final readonly class TokenCandidateData
         public string $sizeBasis,
         public string $dataSource = 'dexscreener',
         public ?TokenLinks $links = null,
+        public ?array $discoveryContext = null,
     ) {}
 
     /**
@@ -81,6 +83,7 @@ final readonly class TokenCandidateData
             $this->sizeBasis,
             $this->dataSource,
             $this->links,
+            $this->discoveryContext,
         );
     }
 
@@ -113,6 +116,7 @@ final readonly class TokenCandidateData
             'age_days' => $this->ageDays,
             'size_basis' => $this->sizeBasis,
             'sources' => $this->sources,
+            'discovery_context' => $this->discoveryContext,
             'data_source' => $this->dataSource,
             'retrieved_at' => $this->retrievedAt->toIso8601String(),
         ];

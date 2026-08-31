@@ -5,7 +5,11 @@ declare(strict_types=1);
 namespace App\Services\DexScreener;
 
 /**
- * Builds the per-run `/latest/dex/search` term list.
+ * Builds the per-run `/latest/dex/search` term list for the **fallback** keyword
+ * discovery source (Step 19). Keyword discovery is OFF by default
+ * (`MEMECOIN_KEYWORD_DISCOVERY_ENABLED=false`) — it is a supplemental long-tail
+ * source and never overrides trending-meta discovery. This engine is only
+ * consulted when keyword discovery is enabled.
  *
  * Deterministic and reproducible (no rotation / randomness yet). Priority:
  *
