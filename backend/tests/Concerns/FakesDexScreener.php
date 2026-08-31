@@ -32,13 +32,21 @@ trait FakesDexScreener
     {
         config()->set('dexscreener.base_url', 'https://api.dexscreener.com');
         config()->set('dexscreener.search_terms', ['pepe']);
+        config()->set('dexscreener.search.ecosystem_terms', []);
+        config()->set('dexscreener.search.term_budget', 25);
         config()->set('dexscreener.trending_meta_terms', 0);
+        config()->set('dexscreener.limits.discovery_candidate_cap', 500);
         config()->set('dexscreener.cache.discovery_ttl', 0);
         config()->set('dexscreener.cache.enrichment_ttl', 0);
         config()->set('dexscreener.http.retries', 0);
         config()->set('dexscreener.http.retry_sleep_ms', 0);
         config()->set('dexscreener.filters.observed_peak_market_cap_min_usd', 5_000_000);
         config()->set('dexscreener.filters.max_age_days', 30);
+
+        // Historical qualification is exercised by HistoricalQualificationTest;
+        // keep the DexScreener-pipeline tests focused (and offline).
+        config()->set('historical.coingecko.enabled', false);
+        config()->set('historical.geckoterminal.enabled', false);
     }
 
     /**

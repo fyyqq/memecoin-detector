@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Models\HistoricalPeakEvidence;
 use App\Models\Token;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -118,6 +119,113 @@ class MemecoinListTest extends TestCase
         $this->makeToken(['observed_peak_market_cap' => 4_999_999.0]);
 
         $this->getJson('/api/memecoins')->assertOk()->assertJsonPath('meta.count', 0);
+    }
+
+    #[Test]
+    public function a_coingecko_verified_historical_market_cap_qualifies_even_when_current_mc_is_low(): void
+    {
+        $token = $this->makeToken(
+            ['symbol' => 'VERIFIED', 'observed_peak_market_cap' => 1_000_000.0],
+            ['market_cap' => 900_000.0],
+        );
+        HistoricalPeakEvidence::query()->create([
+            'token_id' => $token->id,
+            'status' => HistoricalPeakEvidence::STATUS_HISTORICAL_VERIFIED,
+            'peak_value_usd' => 8_000_000.0,
+            'peak_observed_at' => $this->now->subDays(3),
+            'evidence_source' => 'coingecko',
+            'evidence_basis' => 'market_cap',
+            'source_reference' => 'coingecko:x',
+            'checked_at' => $this->now,
+        ]);
+        $token->update([
+            'historical_peak_status' => HistoricalPeakEvidence::STATUS_HISTORICAL_VERIFIED,
+            'historical_peak_value' => 8_000_000.0,
+            'historical_peak_value_at' => $this->now->subDays(3),
+        ]);
+
+        $this->getJson('/api/memecoins')->assertOk()
+            ->assertJsonPath('meta.count', 1)
+            ->assertJsonPath('data.0.symbol', 'VERIFIED')
+            ->assertJsonPath('data.0.qualification_status', 'HISTORICAL_VERIFIED')
+            ->assertJsonPath('data.0.qualification_peak_value', fn ($v) => (float) $v === 8_000_000.0);
+    }
+
+    #[Test]
+    public function an_fdv_estimate_only_token_is_never_returned_by_the_main_list(): void
+    {
+        // Observed peak $2.98M; GeckoTerminal FDV estimate $11.9M. Post-Step-17
+        // layout: the estimate is in its own column, historical_peak_value is null.
+        $token = $this->makeToken([
+            'symbol' => 'ESTONLY',
+            'observed_peak_market_cap' => 2_980_000.0,
+            'historical_peak_status' => HistoricalPeakEvidence::STATUS_HISTORICAL_ESTIMATE,
+            'historical_peak_value' => null,
+            'historical_peak_value_at' => null,
+            'historical_estimate_fdv_usd' => 11_900_000.0,
+            'historical_estimate_fdv_at' => $this->now->subDays(5),
+        ]);
+        HistoricalPeakEvidence::query()->create([
+            'token_id' => $token->id,
+            'status' => HistoricalPeakEvidence::STATUS_HISTORICAL_ESTIMATE,
+            'peak_value_usd' => 11_900_000.0,
+            'peak_observed_at' => $this->now->subDays(5),
+            'evidence_source' => 'geckoterminal',
+            'evidence_basis' => 'fdv_total_supply',
+            'source_reference' => 'geckoterminal:pool:x',
+            'checked_at' => $this->now,
+        ]);
+
+        $this->getJson('/api/memecoins')->assertOk()->assertJsonPath('meta.count', 0);
+
+        // The estimate is still preserved and the observed peak untouched.
+        $fresh = $token->fresh();
+        $this->assertSame(11_900_000.0, $fresh?->historical_estimate_fdv_usd);
+        $this->assertSame(2_980_000.0, $fresh?->observed_peak_market_cap);
+    }
+
+    #[Test]
+    public function an_unknown_token_is_never_returned_by_the_main_list(): void
+    {
+        $token = $this->makeToken(['observed_peak_market_cap' => 1_000_000.0]);
+        HistoricalPeakEvidence::query()->create([
+            'token_id' => $token->id,
+            'status' => HistoricalPeakEvidence::STATUS_UNKNOWN,
+            'peak_value_usd' => null,
+            'checked_at' => $this->now,
+        ]);
+        $token->update(['historical_peak_status' => HistoricalPeakEvidence::STATUS_UNKNOWN]);
+
+        $this->getJson('/api/memecoins')->assertOk()->assertJsonPath('meta.count', 0);
+    }
+
+    #[Test]
+    public function the_main_list_only_ever_contains_verified_or_observed_market_cap_qualification(): void
+    {
+        $this->makeToken(['symbol' => 'OBS', 'observed_peak_market_cap' => 9_000_000.0]);
+
+        $verified = $this->makeToken(['symbol' => 'VER', 'observed_peak_market_cap' => 500_000.0]);
+        $verified->update([
+            'historical_peak_status' => HistoricalPeakEvidence::STATUS_HISTORICAL_VERIFIED,
+            'historical_peak_value' => 7_000_000.0,
+            'historical_peak_value_at' => $this->now->subDays(2),
+        ]);
+
+        // Noise that must be excluded.
+        $est = $this->makeToken(['symbol' => 'EST', 'observed_peak_market_cap' => 2_000_000.0]);
+        $est->update([
+            'historical_peak_status' => HistoricalPeakEvidence::STATUS_HISTORICAL_ESTIMATE,
+            'historical_estimate_fdv_usd' => 40_000_000.0,
+        ]);
+
+        $res = $this->getJson('/api/memecoins')->assertOk();
+
+        $res->assertJsonPath('meta.count', 2);
+        foreach ($res->json('data') as $row) {
+            $this->assertContains($row['qualification_status'], ['CURRENT_OBSERVATION', 'HISTORICAL_VERIFIED']);
+            $this->assertContains($row['qualification_basis'], ['current_market_cap', 'market_cap']);
+            $this->assertNotSame('fdv_total_supply', $row['qualification_basis']);
+        }
     }
 
     #[Test]

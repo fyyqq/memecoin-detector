@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Models\HistoricalPeakEvidence;
 use App\Models\MarketSnapshot;
 use App\Models\Token;
 use Carbon\CarbonImmutable;
@@ -26,8 +27,11 @@ class MemecoinDetailTest extends TestCase
         $this->now = CarbonImmutable::parse('2026-08-28T12:00:00Z');
         CarbonImmutable::setTestNow($this->now);
 
-        // The detail endpoint must never touch the network.
+        // The detail endpoint must never touch the network — DexScreener,
+        // CoinGecko or GeckoTerminal.
         Http::preventStrayRequests();
+
+        config()->set('dexscreener.filters.observed_peak_market_cap_min_usd', 5_000_000);
     }
 
     protected function tearDown(): void
@@ -79,6 +83,27 @@ class MemecoinDetailTest extends TestCase
         return $model->refresh();
     }
 
+    /**
+     * @param  array<string,mixed>  $attrs
+     */
+    private function attachEvidence(Token $token, array $attrs = []): HistoricalPeakEvidence
+    {
+        /** @var HistoricalPeakEvidence $evidence */
+        $evidence = HistoricalPeakEvidence::query()->create(array_replace([
+            'token_id' => $token->id,
+            'status' => HistoricalPeakEvidence::STATUS_HISTORICAL_VERIFIED,
+            'peak_value_usd' => 11_900_000.0,
+            'peak_observed_at' => $this->now->subDays(4),
+            'evidence_source' => HistoricalPeakEvidence::SOURCE_COINGECKO,
+            'evidence_basis' => HistoricalPeakEvidence::BASIS_MARKET_CAP,
+            'source_reference' => 'coingecko:dogecoin',
+            'confidence' => 'high',
+            'checked_at' => $this->now,
+        ], $attrs));
+
+        return $evidence;
+    }
+
     private function detailUrl(Token $token): string
     {
         return "/api/memecoins/{$token->chain_id}/{$token->token_address}";
@@ -96,7 +121,7 @@ class MemecoinDetailTest extends TestCase
         $res->assertJsonPath('data.symbol', 'DOGE');
         $res->assertJsonPath('data.name', 'Dogecoin');
         $res->assertJsonPath('data.token_address', $token->token_address);
-        $res->assertJsonPath('data.data_source', 'dexscreener');
+        $res->assertJsonPath('data.provenance.data_source', 'dexscreener');
         $res->assertJsonPath('meta.recent_snapshot_limit', 50);
         Http::assertNothingSent();
     }
@@ -131,10 +156,10 @@ class MemecoinDetailTest extends TestCase
 
         $res = $this->getJson($this->detailUrl($token))->assertOk();
 
-        $res->assertJsonPath('data.current_market_cap', fn ($v) => (float) $v === 3_300_000.0);
-        $res->assertJsonPath('data.liquidity_usd', fn ($v) => (float) $v === 777_000.0);
-        $res->assertJsonPath('data.price_change_h24', fn ($v) => (float) $v === 9.9);
-        $res->assertJsonPath('data.primary_dex_id', 'new-dex');
+        $res->assertJsonPath('data.latest.market_cap', fn ($v) => (float) $v === 3_300_000.0);
+        $res->assertJsonPath('data.latest.liquidity_usd', fn ($v) => (float) $v === 777_000.0);
+        $res->assertJsonPath('data.latest.price_change_h24', fn ($v) => (float) $v === 9.9);
+        $res->assertJsonPath('data.latest.primary_dex_id', 'new-dex');
         // history is newest first
         $res->assertJsonPath('data.snapshots.0.market_cap', fn ($v) => (float) $v === 3_300_000.0);
         $res->assertJsonPath('data.snapshots.1.market_cap', fn ($v) => (float) $v === 1_000_000.0);
@@ -159,6 +184,131 @@ class MemecoinDetailTest extends TestCase
     }
 
     #[Test]
+    public function historical_qualification_evidence_is_returned(): void
+    {
+        $token = $this->makeToken(['observed_peak_market_cap' => 2_980_000.0, 'observed_peak_market_cap_at' => $this->now->subDay()]);
+        $this->attachEvidence($token, [
+            'status' => HistoricalPeakEvidence::STATUS_HISTORICAL_VERIFIED,
+            'peak_value_usd' => 11_900_000.0,
+            'peak_observed_at' => $this->now->subDays(4),
+            'evidence_source' => 'coingecko',
+            'evidence_basis' => 'market_cap',
+            'confidence' => 'high',
+        ]);
+
+        $res = $this->getJson($this->detailUrl($token))->assertOk();
+
+        $res->assertJsonPath('data.qualification.status', 'HISTORICAL_VERIFIED');
+        $res->assertJsonPath('data.qualification.peak_value', fn ($v) => (float) $v === 11_900_000.0);
+        $res->assertJsonPath('data.qualification.peak_at', $this->now->subDays(4)->toIso8601String());
+        $res->assertJsonPath('data.qualification.source', 'coingecko');
+        $res->assertJsonPath('data.qualification.basis', 'market_cap');
+        $res->assertJsonPath('data.qualification.confidence', 'high');
+        $res->assertJsonPath('data.provenance.historical_qualification_source', 'coingecko');
+    }
+
+    #[Test]
+    public function an_fdv_estimate_is_exposed_separately_and_never_as_a_qualification_market_cap(): void
+    {
+        $token = $this->makeToken(['observed_peak_market_cap' => 1_000_000.0]);
+        $this->attachEvidence($token, [
+            'status' => HistoricalPeakEvidence::STATUS_HISTORICAL_ESTIMATE,
+            'peak_value_usd' => 75_000_000.0,
+            'peak_observed_at' => $this->now->subDays(6),
+            'evidence_source' => 'geckoterminal',
+            'evidence_basis' => 'fdv_total_supply',
+            'confidence' => 'medium',
+        ]);
+
+        $res = $this->getJson($this->detailUrl($token))->assertOk();
+
+        // Not qualified for the main list, and NO market-cap value leaks into qualification.
+        $res->assertJsonPath('data.qualification.status', 'HISTORICAL_ESTIMATE');
+        $res->assertJsonPath('data.qualification.qualified', false);
+        $res->assertJsonPath('data.qualification.peak_value', null);
+        $res->assertJsonPath('data.qualification.basis', null);
+        $res->assertJsonPath('data.qualification.source', null);
+
+        // The estimate is exposed under an explicitly-named, separate block.
+        $res->assertJsonPath('data.historical_estimate.estimated_fdv_usd', fn ($v) => (float) $v === 75_000_000.0);
+        $res->assertJsonPath('data.historical_estimate.estimate_source', 'geckoterminal');
+        $res->assertJsonPath('data.historical_estimate.estimate_basis', 'fdv_total_supply');
+        $res->assertJsonPath('data.historical_estimate.estimate_confidence', 'medium');
+        $res->assertJsonPath('data.historical_estimate.estimate_at', $this->now->subDays(6)->toIso8601String());
+        $res->assertJsonPath('data.historical_estimate.note', fn ($v) => is_string($v) && str_contains($v, 'does NOT verify'));
+
+        // There is no key named historical_market_cap anywhere in the payload.
+        $this->assertStringNotContainsString('historical_market_cap', $res->getContent() ?: '');
+
+        $res->assertJsonPath('data.provenance.historical_estimate_note', fn ($v) => is_string($v) && str_contains($v, 'FDV basis'));
+    }
+
+    #[Test]
+    public function a_token_with_only_an_fdv_estimate_reports_qualified_false(): void
+    {
+        $token = $this->makeToken(['observed_peak_market_cap' => 2_980_000.0]);
+        $this->attachEvidence($token, [
+            'status' => HistoricalPeakEvidence::STATUS_HISTORICAL_ESTIMATE,
+            'peak_value_usd' => 11_900_000.0,
+            'evidence_source' => 'geckoterminal',
+            'evidence_basis' => 'fdv_total_supply',
+        ]);
+
+        $this->getJson($this->detailUrl($token))
+            ->assertOk()
+            ->assertJsonPath('data.qualification.qualified', false)
+            ->assertJsonPath('data.qualification.peak_value', null)
+            ->assertJsonPath('data.historical_estimate.estimated_fdv_usd', fn ($v) => (float) $v === 11_900_000.0)
+            ->assertJsonPath('data.observed.peak_market_cap', fn ($v) => (float) $v === 2_980_000.0);
+    }
+
+    #[Test]
+    public function current_observation_is_derived_when_there_is_no_evidence_row(): void
+    {
+        $token = $this->makeToken(['observed_peak_market_cap' => 8_200_000.0, 'observed_peak_market_cap_at' => $this->now->subDays(3)]);
+
+        $res = $this->getJson($this->detailUrl($token))->assertOk();
+
+        $res->assertJsonPath('data.qualification.status', 'CURRENT_OBSERVATION');
+        $res->assertJsonPath('data.qualification.peak_value', fn ($v) => (float) $v === 8_200_000.0);
+        $res->assertJsonPath('data.qualification.source', 'dexscreener');
+        $res->assertJsonPath('data.qualification.basis', 'current_market_cap');
+        $res->assertJsonPath('data.qualification.confidence', 'high');
+        $res->assertJsonPath('data.provenance.historical_estimate_note', null);
+    }
+
+    #[Test]
+    public function an_unqualified_token_reports_unknown_not_a_denial(): void
+    {
+        $token = $this->makeToken(['observed_peak_market_cap' => 40_000.0]);
+
+        $res = $this->getJson($this->detailUrl($token))->assertOk();
+
+        $res->assertJsonPath('data.qualification.status', 'UNKNOWN');
+        $res->assertJsonPath('data.qualification.peak_value', null);
+        $res->assertJsonPath('data.qualification.source', null);
+    }
+
+    #[Test]
+    public function qualification_peak_stays_distinct_from_observed_peak(): void
+    {
+        // Cold-start recovered token: our snapshots only ever saw $2.98M, but
+        // CoinGecko verified an $11.9M historical peak.
+        $token = $this->makeToken(['observed_peak_market_cap' => 2_980_000.0, 'observed_peak_market_cap_at' => $this->now->subDay()]);
+        $this->attachEvidence($token, ['peak_value_usd' => 11_900_000.0]);
+
+        $res = $this->getJson($this->detailUrl($token))->assertOk();
+
+        $res->assertJsonPath('data.observed.peak_market_cap', fn ($v) => (float) $v === 2_980_000.0);
+        $res->assertJsonPath('data.qualification.peak_value', fn ($v) => (float) $v === 11_900_000.0);
+
+        // The Token's observed_peak_market_cap column is untouched by the read.
+        $fresh = $token->fresh();
+        $this->assertNotNull($fresh);
+        $this->assertSame(2_980_000.0, $fresh->observed_peak_market_cap);
+    }
+
+    #[Test]
     public function a_missing_token_returns_a_clean_404(): void
     {
         $this->getJson('/api/memecoins/solana/NoSuchTokenAddress')
@@ -170,8 +320,10 @@ class MemecoinDetailTest extends TestCase
     public function the_endpoint_is_read_only(): void
     {
         $token = $this->makeToken([], [[], [], []]);
+        $this->attachEvidence($token);
         $tokensBefore = Token::query()->count();
         $snapshotsBefore = MarketSnapshot::query()->count();
+        $evidenceBefore = HistoricalPeakEvidence::query()->count();
         $peakBefore = $token->observed_peak_market_cap;
         $lastObservedBefore = $token->last_observed_at;
 
@@ -179,6 +331,7 @@ class MemecoinDetailTest extends TestCase
 
         $this->assertSame($tokensBefore, Token::query()->count());
         $this->assertSame($snapshotsBefore, MarketSnapshot::query()->count());
+        $this->assertSame($evidenceBefore, HistoricalPeakEvidence::query()->count());
 
         $fresh = $token->fresh();
         $this->assertNotNull($fresh);
@@ -187,10 +340,11 @@ class MemecoinDetailTest extends TestCase
     }
 
     #[Test]
-    public function the_endpoint_never_calls_dexscreener(): void
+    public function the_endpoint_never_calls_any_external_provider(): void
     {
         Http::fake();
         $token = $this->makeToken();
+        $this->attachEvidence($token);
 
         $this->getJson($this->detailUrl($token))->assertOk();
 
@@ -214,9 +368,43 @@ class MemecoinDetailTest extends TestCase
         $res = $this->getJson($this->detailUrl($token))->assertOk();
 
         $res->assertJsonPath('data.id', $token->id);
-        $res->assertJsonPath('data.current_market_cap', fn ($v) => (float) $v === 250_000.0);
-        $res->assertJsonPath('data.observed_peak_market_cap', fn ($v) => (float) $v === 1_200_000.0);
+        $res->assertJsonPath('data.latest.market_cap', fn ($v) => (float) $v === 250_000.0);
+        $res->assertJsonPath('data.observed.peak_market_cap', fn ($v) => (float) $v === 1_200_000.0);
         $res->assertJsonPath('data.age_days', fn ($v) => is_numeric($v) && $v > 30);
+        $res->assertJsonPath('data.qualification.status', 'UNKNOWN');
+    }
+
+    #[Test]
+    public function the_primary_pair_address_is_returned_for_the_live_chart_embed(): void
+    {
+        // Step 17: the React detail page builds the DexScreener chart iframe from
+        // data.chain_id + data.latest.primary_pair_address (never token_address).
+        $token = $this->makeToken(['chain_id' => 'base'], [[
+            'primary_pair_address' => '0xe58d922ebb81a43259577144bf16dce5e76e82999901f893184e917eb0a30e31',
+            'primary_dex_id' => 'uniswap',
+        ]]);
+
+        $res = $this->getJson($this->detailUrl($token))->assertOk();
+
+        $res->assertJsonPath('data.chain_id', 'base');
+        $res->assertJsonPath(
+            'data.latest.primary_pair_address',
+            '0xe58d922ebb81a43259577144bf16dce5e76e82999901f893184e917eb0a30e31',
+        );
+        $res->assertJsonPath('data.latest.primary_dex_id', 'uniswap');
+        // The pair address must never equal the token contract address.
+        $this->assertNotSame($token->token_address, $res->json('data.latest.primary_pair_address'));
+    }
+
+    #[Test]
+    public function a_null_primary_pair_address_is_returned_as_null_for_the_chart_fallback(): void
+    {
+        $token = $this->makeToken([], [['primary_pair_address' => null, 'primary_dex_id' => null]]);
+
+        $this->getJson($this->detailUrl($token))
+            ->assertOk()
+            ->assertJsonPath('data.latest.primary_pair_address', null)
+            ->assertJsonPath('data.latest.primary_dex_id', null);
     }
 
     #[Test]
@@ -236,10 +424,10 @@ class MemecoinDetailTest extends TestCase
 
         $res = $this->getJson($this->detailUrl($token))->assertOk();
 
-        foreach (['current_market_cap', 'price_usd', 'fdv', 'liquidity_usd', 'volume_h24', 'price_change_h24', 'txns_h24', 'buys_h24', 'sells_h24'] as $field) {
-            $res->assertJsonPath("data.{$field}", null);
+        foreach (['market_cap', 'price_usd', 'fdv', 'liquidity_usd', 'volume_h24', 'price_change_h24', 'txns_h24', 'buys_h24', 'sells_h24'] as $field) {
+            $res->assertJsonPath("data.latest.{$field}", null);
         }
-        $res->assertJsonPath('data.pair_count', null);
+        $res->assertJsonPath('data.pair.pair_count', null);
         $res->assertJsonPath('data.snapshots.0.market_cap', null);
         $res->assertJsonPath('data.snapshots.0.txns_h24', null);
     }
@@ -248,14 +436,16 @@ class MemecoinDetailTest extends TestCase
     public function the_detail_query_does_not_run_per_snapshot_queries(): void
     {
         $token = $this->makeToken([], array_fill(0, 12, []));
+        $this->attachEvidence($token);
 
         DB::enableQueryLog();
         $this->getJson($this->detailUrl($token))->assertOk();
         $queries = DB::getQueryLog();
         DB::disableQueryLog();
 
-        // token lookup + recent-snapshot window = 2; small headroom for the
-        // framework, but never one-per-row.
-        $this->assertLessThanOrEqual(4, count($queries));
+        // token + historical-evidence eager + recent-snapshot window
+        // + pump events + explanation eager + evidence eager = 6; small
+        // headroom for the framework, but never one-per-row.
+        $this->assertLessThanOrEqual(7, count($queries));
     }
 }

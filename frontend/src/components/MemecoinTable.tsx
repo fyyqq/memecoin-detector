@@ -2,6 +2,7 @@ import { useNavigate } from 'react-router-dom'
 import type { Memecoin } from '../types/memecoin'
 import { formatAgeDays, formatDateTime, formatRelativeTime, formatUsd } from '../lib/format'
 import { CopyAddress } from './CopyAddress'
+import { QualificationBadge } from './QualificationBadge'
 
 interface MemecoinTableProps {
   rows: Memecoin[]
@@ -51,6 +52,7 @@ export function MemecoinTable({ rows }: MemecoinTableProps) {
               <td>
                 <span className="symbol">
                   {row.symbol ?? '—'}
+                  <QualificationBadge status={row.qualification_status} className="badge-inline" />
                   <CopyAddress address={row.token_address} className="copy-inline" />
                 </span>
                 <span className="name">{row.name ?? row.token_address}</span>

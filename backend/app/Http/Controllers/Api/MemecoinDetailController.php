@@ -21,6 +21,12 @@ class MemecoinDetailController extends Controller
     private const RECENT_SNAPSHOT_LIMIT = 50;
 
     /**
+     * How many recent pump events (+ their AI explanations) to attach. Newest
+     * first. A memecoin has a handful of observed pumps, not hundreds.
+     */
+    private const RECENT_PUMP_EVENT_LIMIT = 10;
+
+    /**
      * GET /api/memecoins/{chainId}/{tokenAddress}
      *
      * Read-only token detail, straight from PostgreSQL. Never calls DexScreener,
@@ -42,6 +48,7 @@ class MemecoinDetailController extends Controller
                 $query->where('token_address', $tokenAddress)
                     ->orWhereRaw('lower(token_address) = ?', [Str::lower($tokenAddress)]);
             })
+            ->with('historicalPeakEvidence')
             ->first();
 
         if ($token === null) {
@@ -59,10 +66,20 @@ class MemecoinDetailController extends Controller
         $token->setRelation('recentSnapshots', $snapshots);
         $token->setRelation('latestSnapshot', $snapshots->first());
 
+        // Recent pump events + their persisted AI explanations + the evidence
+        // those explanations cite. Read-only: this NEVER triggers AI generation.
+        $token->setRelation('recentPumpEvents', $token->pumpEvents()
+            ->with(['explanation', 'evidences'])
+            ->orderByDesc('started_at')
+            ->orderByDesc('id')
+            ->limit(self::RECENT_PUMP_EVENT_LIMIT)
+            ->get());
+
         return MemecoinDetailResource::make($token)->additional([
             'meta' => [
                 'retrieved_at' => CarbonImmutable::now()->toIso8601String(),
                 'recent_snapshot_limit' => self::RECENT_SNAPSHOT_LIMIT,
+                'recent_pump_event_limit' => self::RECENT_PUMP_EVENT_LIMIT,
                 'observed_peak_note' => 'observed_peak_market_cap is the highest market cap captured by this detector since first_observed_at — not a guaranteed lifetime / all-time high.',
             ],
         ]);

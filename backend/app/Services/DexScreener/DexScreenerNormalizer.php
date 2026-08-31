@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\DexScreener;
 
 use App\DTOs\DexScreener\TokenCandidateData;
+use App\DTOs\DexScreener\TokenLinks;
 use Carbon\CarbonImmutable;
 
 /**
@@ -86,7 +87,56 @@ class DexScreenerNormalizer
             sources: array_values(array_unique($sources)),
             retrievedAt: $now,
             sizeBasis: $this->sizeBasis($marketCap, $fdv),
+            links: $this->links($primary['info'] ?? null),
         );
+    }
+
+    /**
+     * The small metadata slice DexScreener's pair `info` exposes:
+     * `info.websites[] = [{url,label}]`, `info.socials[] = [{url,type}]`
+     * (type ∈ twitter | telegram | discord | …), `info.imageUrl`.
+     * Returns null when nothing usable is present.
+     */
+    private function links(mixed $info): ?TokenLinks
+    {
+        if (! is_array($info)) {
+            return null;
+        }
+
+        $websites = is_array($info['websites'] ?? null) ? $info['websites'] : [];
+        $website = null;
+        foreach ($websites as $entry) {
+            $url = is_array($entry) ? $this->stringOrNull($entry['url'] ?? null) : null;
+            if ($url !== null) {
+                $website = $url;
+                break;
+            }
+        }
+
+        $twitter = null;
+        $telegram = null;
+        $socials = is_array($info['socials'] ?? null) ? $info['socials'] : [];
+        foreach ($socials as $entry) {
+            if (! is_array($entry)) {
+                continue;
+            }
+            $type = mb_strtolower((string) ($entry['type'] ?? ''));
+            $url = $this->stringOrNull($entry['url'] ?? null);
+            if ($url === null) {
+                continue;
+            }
+            if ($type === 'twitter' && $twitter === null) {
+                $twitter = $url;
+            } elseif ($type === 'telegram' && $telegram === null) {
+                $telegram = $url;
+            }
+        }
+
+        $image = $this->stringOrNull($info['imageUrl'] ?? null);
+
+        $links = new TokenLinks($website, $twitter, $telegram, $image);
+
+        return $links->isEmpty() ? null : $links;
     }
 
     public function tokenKey(string $chainId, string $tokenAddress): string

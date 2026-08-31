@@ -37,18 +37,45 @@ return [
     ],
 
     /*
-    | Curated memecoin search terms for the /latest/dex/search sweep. This list
-    | is intentionally short and easy to edit; it is NOT exhaustive.
+    | Category A — core meme search terms for the /latest/dex/search sweep.
+    | Curated, easy to edit, NOT exhaustive. Highest priority in the search-term
+    | engine (see App\Services\DexScreener\SearchTermEngine).
     */
     'search_terms' => array_values(array_filter(array_map(
         'trim',
-        explode(',', (string) env('MEMECOIN_SEARCH_TERMS', 'pepe,doge,cat,dog,wif,inu,meme,shib,bonk,elon')),
+        explode(',', (string) env(
+            'MEMECOIN_SEARCH_TERMS',
+            'pepe,doge,cat,dog,frog,wif,inu,meme,shib,bonk,elon,ai,trump,politics,animal',
+        )),
     ))),
 
+    'search' => [
+
+        /*
+        | Category C — ecosystem / chain names used ONLY as supplementary
+        | discovery signals. DexScreener's `/latest/dex/search` is GLOBAL — these
+        | are NOT chain filters and do not guarantee results on that chain.
+        | Lowest priority in the engine.
+        */
+        'ecosystem_terms' => array_values(array_filter(array_map(
+            'trim',
+            explode(',', (string) env('MEMECOIN_ECOSYSTEM_TERMS', 'solana,base,ethereum,bsc,arbitrum')),
+        ))),
+
+        /*
+        | Total number of search terms per run, after core + trending-meta +
+        | ecosystem are merged and de-duplicated. Keeps the sweep well inside the
+        | 300 req/min search budget.
+        */
+        'term_budget' => max(0, (int) env('MEMECOIN_SEARCH_TERM_BUDGET', 25)),
+    ],
+
     /*
-    | How many trending meta names/slugs to fold into the search-term sweep.
+    | Category B — how many trending "meta" entries (from /metas/trending/v1) to
+    | consider for search terms. Each contributes a slug and a name. The
+    | `search.term_budget` above is the real ceiling.
     */
-    'trending_meta_terms' => (int) env('DEXSCREENER_TRENDING_META_TERMS', 5),
+    'trending_meta_terms' => (int) env('DEXSCREENER_TRENDING_META_TERMS', 8),
 
     /*
     | Sprint 1 eligibility: age <= max_age_days AND observed_peak_market_cap >=
@@ -75,6 +102,10 @@ return [
     'limits' => [
         'default_result_limit' => (int) env('MEMECOIN_DEFAULT_LIMIT', 20),
         'max_result_limit' => (int) env('MEMECOIN_MAX_LIMIT', 50),
+        // Hard ceiling on the UNIQUE candidate set kept per run, before
+        // prioritization + enrichment. Independent of ?limit= and of the
+        // enrichment ceiling below.
+        'discovery_candidate_cap' => max(1, (int) env('MEMECOIN_DISCOVERY_CANDIDATE_CAP', 500)),
         // Hard ceiling on enrichment calls per run, regardless of ?limit=.
         'max_candidates_to_enrich' => (int) env('MEMECOIN_MAX_ENRICH', 120),
     ],

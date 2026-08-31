@@ -74,7 +74,11 @@ PostgreSQL          (persistent store, evidence, historical rankings)
 1. React is the presentation layer.
 2. Laravel owns API and business logic.
 3. PostgreSQL is the persistent data store.
-4. External APIs must be accessed from Laravel, never directly from the browser.
+4. External **APIs** must be accessed from Laravel, never directly from the
+   browser. (Documented exception, Step 17: the token detail page embeds a
+   DexScreener price-chart `<iframe>` — a third-party *visual* embed. Our
+   JavaScript still never calls `api.dexscreener.com`; only the iframe element
+   loads DexScreener content.)
 5. External API failures must be handled gracefully.
 6. Raw provider responses are not trusted blindly — normalize them first.
 7. Never expose secrets to React.
@@ -351,19 +355,22 @@ next sprint.
 
 ## Domain model
 
-`Token` and `MarketSnapshot` exist as **minimal** tables (Sprint 1). The rest are
-documented for naming consistency only — do **not** create them yet.
+`Token`, `MarketSnapshot`, `IngestionRun`, `HistoricalPeakEvidence`, `PumpEvent`
+and `Evidence` exist as tables. The rest are documented for naming consistency
+only — do **not** create them yet.
 
 | Concept          | Meaning | Status |
 | ---------------- | ------- | ------ |
-| `Token`          | A memecoin (chain + address identity). Unique on `(chain_id, token_address)`. Carries `observed_peak_market_cap` + `observed_peak_market_cap_at` + `first/last_observed_at` + `earliest_pair_created_at`. | **implemented (minimal)** |
+| `Token`          | A memecoin (chain + address identity). Unique on `(chain_id, token_address)`. Carries `observed_peak_market_cap` (+`_at`) = OUR OWN snapshot peak; SEPARATE `historical_peak_value` (+`_at`) = a VERIFIED/OBSERVED market cap that qualifies the main list; SEPARATE `historical_estimate_fdv_usd` (+`_at`) = a GeckoTerminal FDV-basis estimate (informational, never qualifies); `historical_peak_status` = the raw label. `first/last_observed_at`, `earliest_pair_created_at`. | **implemented (minimal)** |
 | `MarketSnapshot` | One market observation for a token at `observed_at` (price, market cap, fdv, liquidity, volume, txns, primary pair). Many rows per token. No raw payloads. | **implemented (minimal)** |
 | `IngestionRun`   | One execution of the discovery pipeline — `trigger` (`manual`/`scheduled`), `status` (`running`/`completed`/`failed`), `started/completed_at`, funnel counts, `error_message`. Observability only. | **implemented (minimal)** |
+| `HistoricalPeakEvidence` | One row per token (upserted, re-evaluable): `status` (`CURRENT_OBSERVATION`/`HISTORICAL_VERIFIED`/`HISTORICAL_ESTIMATE`/`UNKNOWN`), `peak_value_usd`, `evidence_source` (dexscreener/coingecko/geckoterminal), `evidence_basis` (market_cap/fdv_total_supply/current_market_cap), `source_reference`, `confidence`, `checked_at`. No provider JSON. **Only `CURRENT_OBSERVATION` / `HISTORICAL_VERIFIED` qualify the main list** (`qualifies()`); `HISTORICAL_ESTIMATE` is `isInformationalEstimate()` only. | **implemented** |
 | `Pair`           | A trading pair on a DEX for a token. | future |
 | `Narrative`      | A theme/meta a token belongs to (e.g. "dog coins"). | future |
 | `TokenRelation`  | A relationship between two tokens (co-movement, shared narrative, etc.). | future |
-| `PumpEvent`      | A detected significant upward move for a token/pair. | future |
-| `Evidence`       | A stored artifact backing a claim (URL, payload, timestamp, type). | future |
+| `PumpEvent`      | One detected significant upward move in a token's OBSERVATION SERIES (our ~10-min snapshots — an "observed pump", not tick-level). `started/peak/ended_at`, `start/peak_market_cap`, `start/peak_price_usd`, `market_cap_change_pct`, `price_change_pct`, `volume_h24_change_ratio` + `txns_h24_change_ratio` (ROLLING 24h ratios, not interval), `duration_minutes`, `detection_score` (0–100 strength, not a prediction), `confidence` (low/medium/high), `status` (active/completed), `evidence_collected_at` (evidence-engine cooldown). `hasMany Evidence`. | **implemented (Step 16A)** |
+| `Evidence`       | One timestamped FACT present around a `PumpEvent` (Step 16B) — `category` (`MARKET`/`TOKEN_METADATA`/`ORIGIN`/`NEWS`/`RELATED_TOKEN`; `LISTING`/`COMMUNITY` reserved), `source`, `source_url`, `title`, `observed_at`, `published_at`, `relevance_score` (0–100, investigative relevance NOT causation probability), `confidence` (low/medium/high), `summary` (neutral one-sentence fact), `raw_reference` (short id/domain/hash — no payload JSON), `dedupe_hash`. `belongsTo PumpEvent` + `belongsTo Token`. Stored SEPARATELY from interpretation — never asserts causality. See [docs/evidence-engine.md](docs/evidence-engine.md). | **implemented (Step 16B)** |
+| `PumpExplanation` | One AI-generated, evidence-grounded interpretation per `PumpEvent` (Step 16C) — `status` (`pending`/`completed`/`failed`), `summary`, `primary_catalyst` (fixed enum incl. `UNKNOWN`), `confidence` (low/medium/high), `explanation_json` (full validated structure: summary / secondary_signals / evidence / caveats / unknowns — every claim cites evidence ids), `evidence_count`, `model_provider`, `model_name`, `error_message`, `generated_at`. Unique on `pump_event_id`; upserted on regeneration. The LLM INTERPRETS stored `Evidence` — never adds facts, never asserts causality. `belongsTo PumpEvent`. See [docs/pump-explanation.md](docs/pump-explanation.md). | **implemented (Step 16C)** |
 | `MonthlyRanking` | Preserved Top-N leaders for a calendar month. | future |
 
 ## Processing pipeline (concept)
@@ -384,11 +391,19 @@ In scope:
 1. Discover newly launched memecoins.
 2. Filter by pair age ≤ 30 days (`earliest_pair_created_at` = earliest DEX pool
    creation across the token's pairs; **not** token deploy time).
-3. **Qualify by observed peak market cap ≥ $5M.** A token qualifies if age ≤ 30
-   days **and it has ever been observed by our snapshots at market cap ≥ $5M** —
-   current market cap may be lower. "Observed peak" = highest MC our own
-   snapshots have captured since `first_observed_at`, **not** a guaranteed
-   lifetime / all-time high. FDV never substitutes for market cap.
+3. **Qualify for the main list when age ≤ 30 days AND a VERIFIED or OBSERVED
+   market cap has EVER reached $5M** — `CURRENT_OBSERVATION` (our own snapshot saw
+   MC ≥ $5M — "observed peak", the highest MC our snapshots captured since
+   `first_observed_at`, not a lifetime high) **or** `HISTORICAL_VERIFIED`
+   (CoinGecko historical market cap). **`HISTORICAL_ESTIMATE` (GeckoTerminal
+   FDV basis = peak price × total supply) does NOT qualify the main list** — it
+   is an informational secondary signal, stored
+   (`tokens.historical_estimate_fdv_usd` + `historical_peak_evidences`) and shown
+   on the detail page as a clearly-labelled estimate, never a market cap.
+   `UNKNOWN` = no safe evidence, never "did not reach $5M". **FDV never
+   substitutes for market cap** (market cap = price × *circulating* supply; FDV =
+   price × *total* supply). See *Historical Peak Qualification* in the Sprint 1
+   doc.
 4. Cross-chain candidate discovery.
 5. Basic market metrics (price, market cap, FDV, liquidity, volume, price change,
    chain, DEX).
@@ -402,9 +417,10 @@ In scope:
 Same pipeline runs two ways — HTTP `GET /api/memecoins/discover` (`trigger=manual`)
 and the scheduled command `php artisan memecoins:discover` (`trigger=scheduled`,
 every 10 min via Laravel's scheduler, `withoutOverlapping()`): DISCOVER → ENRICH →
-NORMALIZE → AGE FILTER → PERSIST TOKEN + SNAPSHOT → UPDATE OBSERVED PEAK → QUALIFY
-BY OBSERVED PEAK. Each run is recorded in `ingestion_runs`. No queue / Redis /
-Horizon — synchronous execution. Details:
+NORMALIZE → AGE FILTER → PERSIST TOKEN + SNAPSHOT → UPDATE OBSERVED PEAK →
+CURRENT OBSERVATION CHECK → HISTORICAL LOOKUP → QUALIFICATION → PERSIST EVIDENCE.
+Each run is recorded in `ingestion_runs`. No queue / Redis / Horizon —
+synchronous execution. Details:
 [docs/sprint-1-discovery.md](docs/sprint-1-discovery.md).
 
 Explicitly **excluded** from Sprint 1:
@@ -425,36 +441,143 @@ Explicitly **excluded** from Sprint 1:
   (`schedule:work`) + `frontend`**. `docker compose up -d` starts everything;
   the scheduler runs automatically. `GET /api/health` on the backend.
 - DexScreener discovery service implemented (`GET /api/memecoins/discover`):
-  discovers candidates from profiles / boosts / curated search, enriches via
-  `/token-pairs/v1`, normalizes, age-filters, and **persists** a `Token` +
+  discovers candidates from profiles / boosts / a budgeted **search-term engine**
+  (`SearchTermEngine`: core meme terms → trending-meta slugs → meta names →
+  ecosystem terms, deduped, capped at `MEMECOIN_SEARCH_TERM_BUDGET`=25), enriches
+  via `/token-pairs/v1`, normalizes, age-filters, and **persists** a `Token` +
   `MarketSnapshot` per age-eligible token, maintaining `observed_peak_market_cap`.
-  Qualification = age ≤ 30 days AND observed peak MC ≥ $5M.
+  Three separate ceilings: `MEMECOIN_DISCOVERY_CANDIDATE_CAP` (500 unique
+  candidates) → `MEMECOIN_MAX_ENRICH` (120 enriched) → `?limit=` (20 returned).
+  Deterministic pre-enrichment prioritization (source count → boost → profile
+  freshness → search hits → token key; **never market cap**). Coverage
+  diagnostics: `search_terms_*`, `discovery_source_counts`, `chains_discovered`
+  (counted from candidates actually seen), `candidate_cap_dropped`,
+  `selected_for_enrichment`.
+- **`GET /api/memecoins/discovery-status`** — read-only coverage report,
+  PostgreSQL (`ingestion_runs`) only, never calls DexScreener. Latest run
+  summary + latest completed run's discovery metrics + `chains_discovered` map.
+- **Historical qualification engine (Step 13C, Strategy D)** runs in the pipeline
+  after the age filter: `CURRENT OBSERVATION CHECK → HISTORICAL LOOKUP →
+  QUALIFICATION → PERSIST EVIDENCE`. A token qualifies for the **main list** when
+  age ≤ 30d **AND a VERIFIED / OBSERVED market cap has EVER reached $5M** — via
+  `CURRENT_OBSERVATION` (our own snapshot) or `HISTORICAL_VERIFIED` (CoinGecko
+  non-zero market-cap point). **`HISTORICAL_ESTIMATE`** (GeckoTerminal peak price
+  × immutable total supply — an **FDV basis estimate, NOT a market cap**) is
+  built and stored but **does NOT qualify the main list** — it mirrors to
+  `tokens.historical_estimate_fdv_usd` (never `historical_peak_value`) and is an
+  informational secondary signal on the detail page. `UNKNOWN` = no safe evidence
+  (never "did not reach $5M"), stored and re-evaluated. External lookups only for
+  tokens not already qualified on our own observed peak; 6 h re-lookup cooldown;
+  per-run budget. `observed_peak_market_cap` is never overwritten. CoinGecko
+  optional/resilient; `COINGECKO_API_KEY` never exposed to React. Adapters:
+  `app/Services/Historical/{CoinGeckoClient,GeckoTerminalClient,HistoricalQualificationService}`.
+  Config: `config/historical.php`. Do **not** remove GeckoTerminal.
 - Scheduled ingestion: the `scheduler` container runs Laravel's `schedule:work`,
   firing `memecoins:discover --trigger=scheduled` every 10 min
   (`withoutOverlapping()`, file-cache lock, no Redis / Horizon / queue). Every
   run — HTTP or scheduled — is recorded in `ingestion_runs`; run summaries show
   in `docker compose logs scheduler`.
 - **Read API `GET /api/memecoins`** — read-only, PostgreSQL only, never calls
-  DexScreener. Returns qualified tokens (age ≤ 30d AND observed peak MC ≥ $5M)
-  with current fields from the latest `MarketSnapshot`, sorted by observed peak
-  DESC. `?chain=` / `?limit=` (default 20, max 50). 2 queries, no N+1.
+  DexScreener / CoinGecko / GeckoTerminal. Returns **only** tokens qualified by
+  `CURRENT_OBSERVATION` or `HISTORICAL_VERIFIED` (a verified/observed market cap
+  ≥ $5M). Each row carries `qualification_status` / `qualification_peak_value` /
+  `qualification_peak_at` / `qualification_source` / `qualification_basis` (always
+  `current_market_cap` or `market_cap`, never `fdv_total_supply`) — kept DISTINCT
+  from `observed_peak_market_cap`. **`HISTORICAL_ESTIMATE` and `UNKNOWN` are
+  excluded.** Sorted by `GREATEST(observed_peak, historical_peak_value)` DESC.
+  `?chain=` / `?limit=` (default 20, max 50). ≤ 3 queries, no N+1.
 - **Detail API `GET /api/memecoins/{chainId}/{tokenAddress}`** — read-only,
-  PostgreSQL only, never calls DexScreener. Identity is `(chain_id,
-  token_address)`, never the symbol. Returns token identity + latest snapshot +
-  observed peak + a bounded window of recent snapshots (newest first, capped at
-  50). **Dashboard qualification is NOT an existence gate** — a de-qualified
-  token still resolves. Miss → `404 {"error": "Memecoin not found."}`. 2 queries,
-  no N+1.
+  PostgreSQL only, never calls DexScreener / CoinGecko / GeckoTerminal. Identity
+  is `(chain_id, token_address)`, never the symbol. **Nested response** (Step 15):
+  `qualification` (MAIN-LIST qualification — `qualified` bool + `peak_value` = a
+  verified/observed market cap, `null` for `HISTORICAL_ESTIMATE`/`UNKNOWN`),
+  **`historical_estimate`** (Step 17-fix — an explicitly-named FDV-basis block:
+  `estimated_fdv_usd` / `estimate_source` / `estimate_basis` /
+  `estimate_confidence` + disclaimer; `null` unless a `HISTORICAL_ESTIMATE`
+  evidence row exists; there is **no `historical_market_cap` key**), `observed`
+  (our own peak — kept DISTINCT from both), `latest` (most recent snapshot),
+  `pair`, `snapshots` (≤ 50, newest first), `pump_intelligence` (Step 16C — ≤ 10 recent
+  pump events, each with its persisted AI `explanation` + `presented` prose +
+  `cited_evidence`; `status: "pending"` when not yet generated; **never triggers
+  AI generation**), `provenance`. **Dashboard qualification is NOT an existence
+  gate** — any stored `Token` resolves. Miss →
+  `404 {"error": "Memecoin not found."}`. ≤ 6 queries, no N+1.
 - **React dashboard** ("30-Day Leaders") reads `GET /api/memecoins` only —
   table, chain filter, Refresh + 60s auto-refresh, loading/empty/error states,
-  provenance notes. Rows link to the detail page; each row has a copy-contract-
-  address button. Never talks to DexScreener.
+  provenance notes. Rows link to the detail page; each row has a
+  copy-contract-address button and a compact `CURRENT`/`VERIFIED`/`ESTIMATE`
+  qualification badge. Never talks to DexScreener.
 - **React token detail page** (`/memecoin/:chainId/:tokenAddress`, React Router)
-  reads `GET /api/memecoins/{chainId}/{tokenAddress}` only. Sections: header,
-  market overview, market activity, token identity, observation history
-  (sparkline + table), **pump-intelligence placeholder**, **token-origin
-  placeholder**, data provenance. The "Why did this coin pump?" / "Why was this
-  coin created?" sections are labelled placeholders — no AI, no fabricated
-  reasons. `frontend/src/{api,types,lib,components,pages}`.
-- Tables: `tokens`, `market_snapshots`, `ingestion_runs` (minimal). No queue /
-  ranking / AI / relations / auth.
+  reads `GET /api/memecoins/{chainId}/{tokenAddress}` only (for data). Sections:
+  header (middle-truncated CA + copy + back link), **live market chart** (Step 17
+  — embedded DexScreener `<iframe>` built from `chain_id` +
+  `latest.primary_pair_address`, format-checked, never `token_address`; null pair
+  → "Live chart unavailable"), market overview (stat cards incl. **Observed Peak
+  MC vs Qualification Peak**, ESTIMATE → "Estimated — FDV basis"), **"Why is this
+  token on the list?"** (status-coloured evidence card — UNKNOWN never "did not
+  reach $5M"), **pump events** (Step 16A–C — timeline `started→peak` / MC % /
+  price % / detection score+confidence / status, each expands to the persisted
+  AI "why did this coin pump?" explanation with expandable cited evidence;
+  `pending`/`failed`/`UNKNOWN` show neutral notes, never a guessed reason),
+  market activity, observation history (sparkline + table), token identity,
+  **"Why was this coin created?"** (placeholder, or stored ORIGIN/TOKEN_METADATA
+  evidence as plain facts when present — never inferred intent), data provenance.
+  Reads persisted data/explanations only — never calls AI or DexScreener from
+  JS; the chart iframe is the only third-party content.
+  `frontend/src/{api,types,lib,components,pages}`.
+- **Pump event detection (Step 16A)** — `php artisan memecoins:detect-pumps`,
+  scheduled `5,15,25,35,45,55 * * * *` (same cadence as discovery, offset so it
+  runs *after* ingestion; reuses the `scheduler` container; `withoutOverlapping`).
+  `PumpDetectionService` reads only stored snapshots — **never** DexScreener /
+  CoinGecko / GeckoTerminal. Deterministic: over the last ~24 snapshots per
+  recently-observed token it compares latest vs ~60-min-earlier, requires a
+  ≥ 50% MC **or** ≥ 40% price move **plus** ≥ 2 total confirming signals (MC /
+  price / rolling-24h `volume_h24_change_ratio` / rolling-24h
+  `txns_h24_change_ratio`), scores 0–100 (strength, not prediction), assigns
+  low/medium/high confidence, and creates or **merges** a `pump_events` row
+  (one continuous pump = one event; separate pumps = separate events).
+  Config: `config/pump.php` (heuristic MVP thresholds). **"When", not "why" —
+  no catalysts/AI (that is 16B/16C).**
+- **Evidence engine (Step 16B)** — `php artisan memecoins:collect-evidence`
+  `[--force]`, scheduled `8,18,28,38,48,58 * * * *` (a few minutes *after* pump
+  detection; reuses the `scheduler` container; `withoutOverlapping`). Collects
+  timestamped **facts** around each recent `PumpEvent` inside a bounded window
+  (`started_at − 60m` … `peak_at + 30m`) → `evidences` rows. Four collectors in
+  `app/Services/Evidence/`: `MarketEvidenceCollector` (PG only — event metrics +
+  snapshots), `TokenMetadataEvidenceCollector` (PG only — stored token links +
+  pool age), `RelatedTokenEvidenceCollector` (PG only — other tracked tokens
+  that rose ≥ 40% in the lead window before the event; **not** the future
+  `TokenRelation` graph; never `high` confidence), `NewsEvidenceCollector` (the
+  **only** external call — GDELT 2.1 DOC API, free/no-key; bounded per-run
+  request budget; any failure logged + skipped, never fails the command; no
+  fabricated evidence). Deterministic `relevance_score` 0–100 (**investigative
+  relevance, not causation probability**); `EvidenceRecorder` upserts on
+  `(pump_event_id, dedupe_hash)` (idempotent); per-event
+  `evidence_collected_at` cooldown (2h). **Evidence is stored separately from
+  interpretation and never asserts causality** — "published 12 min before the
+  observed pump peak", never "caused the pump". No AI (that is Step 16C). No
+  frontend changes. Config: `config/evidence.php`. Docs:
+  `docs/evidence-engine.md`.
+- **AI pump explanation (Step 16C)** — `php artisan memecoins:explain-pumps`
+  `[--force]`, scheduled `9,19,29,39,49,59 * * * *` (a minute *after* evidence
+  collection; reuses the `scheduler` container; `withoutOverlapping`). The LLM is
+  an **INTERPRETER of stored `Evidence`, never a data source** — it sees one
+  `PumpEvent` + its ranked, capped evidence (`≤ PUMP_EXPLANATION_MAX_EVIDENCE`),
+  never the wider DB, never browses. Vendor-agnostic: `PumpExplanationProvider`
+  interface, provider chosen by `AI_PROVIDER` (`anthropic` default via forced
+  tool-call; `null` = never call out, always fail). `PumpExplanationValidator`
+  hard-rejects malformed output, out-of-enum values, hallucinated/uncited
+  evidence ids, and **causal language** ("caused/triggered the pump") → recorded
+  `failed`, never a fabricated fallback. Output: `summary`, `primary_catalyst`
+  (fixed enum incl. `UNKNOWN`), `secondary_signals[]`, `evidence[]` (**every
+  claim cites evidence ids**), `confidence`, `caveats[]`, `unknowns[]` →
+  `pump_explanations` (one per event, upserted; regeneratable — `generated_at` +
+  6h cooldown). Evidence text is sent as **untrusted data** in a delimited block,
+  never in the system prompt. `PumpExplanationPresenter` derives the UI prose
+  ("Most supported explanation", never "Confirmed reason"; UNKNOWN → "no verified
+  catalyst established", never "we don't know"). **The read API never calls the
+  provider** — generation is CLI/scheduler only. `ANTHROPIC_API_KEY` server-side
+  only. Config: `config/ai.php`. Docs: `docs/pump-explanation.md`.
+- Tables: `tokens`, `market_snapshots`, `ingestion_runs`,
+  `historical_peak_evidences`, `pump_events`, `evidences`, `pump_explanations`.
+  No queue / trend score / related-token graph / auth.

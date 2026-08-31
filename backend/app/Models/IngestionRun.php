@@ -38,6 +38,12 @@ class IngestionRun extends Model
         'peak_updated',
         'qualified',
         'error_message',
+        // Step 14 coverage metrics.
+        'selected_for_enrichment',
+        'candidate_cap_dropped',
+        'search_terms_used',
+        'search_terms_with_results',
+        'chains_discovered',
     ];
 
     protected function casts(): array
@@ -45,6 +51,7 @@ class IngestionRun extends Model
         return [
             'started_at' => 'immutable_datetime',
             'completed_at' => 'immutable_datetime',
+            'chains_discovered' => 'array',
         ];
     }
 }

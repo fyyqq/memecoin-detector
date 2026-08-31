@@ -29,6 +29,12 @@ export function formatAgeDays(days: number | null): string {
   return `${Math.floor(days)}d`
 }
 
+/** Middle-truncate a contract address for display: `Ci11w…LQdx4`. */
+export function truncateMiddle(value: string, head = 5, tail = 5): string {
+  if (value.length <= head + tail + 1) return value
+  return `${value.slice(0, head)}…${value.slice(-tail)}`
+}
+
 export function formatDateTime(iso: string | null): string {
   if (!iso) return '—'
   const date = new Date(iso)
@@ -53,6 +59,13 @@ export function formatPercent(value: number | null): string {
   if (value === null || Number.isNaN(value)) return '—'
   const sign = value > 0 ? '+' : ''
   return `${sign}${value.toFixed(2)}%`
+}
+
+/** Signed percentage, no decimals — for large pump-event moves (`+420%`). */
+export function formatPercentCompact(value: number | null): string {
+  if (value === null || Number.isNaN(value)) return '—'
+  const sign = value > 0 ? '+' : ''
+  return `${sign}${Math.round(value)}%`
 }
 
 /** USD price — adapts precision for sub-dollar memecoin prices. */

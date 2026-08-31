@@ -1,3 +1,5 @@
+import type { QualificationStatus } from './memecoinDetail'
+
 /** One qualified memecoin row from `GET /api/memecoins`. */
 export interface Memecoin {
   id: number
@@ -11,6 +13,13 @@ export interface Memecoin {
   /** Highest market cap this detector has captured (NOT a lifetime ATH). */
   observed_peak_market_cap: number | null
   observed_peak_market_cap_at: string | null
+
+  /** How this token qualifies (always one of the 3 qualifying statuses here). */
+  qualification_status: QualificationStatus
+  qualification_peak_value: number | null
+  qualification_peak_at: string | null
+  qualification_source: string | null
+  qualification_basis: string | null
 
   /** Days since earliest DEX pool creation (not token deploy time). */
   age_days: number | null

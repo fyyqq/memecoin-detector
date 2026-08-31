@@ -44,6 +44,7 @@ final readonly class TokenCandidateData
         public CarbonImmutable $retrievedAt,
         public string $sizeBasis,
         public string $dataSource = 'dexscreener',
+        public ?TokenLinks $links = null,
     ) {}
 
     /**
@@ -79,6 +80,7 @@ final readonly class TokenCandidateData
             $this->retrievedAt,
             $this->sizeBasis,
             $this->dataSource,
+            $this->links,
         );
     }
 

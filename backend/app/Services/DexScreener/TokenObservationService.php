@@ -35,6 +35,16 @@ class TokenObservationService
                 $token->symbol = $candidate->symbol;
             }
 
+            // Small stored metadata slice for the evidence engine — only
+            // overwrite with a non-null value, never clear.
+            if ($candidate->links !== null) {
+                $token->website_url = $candidate->links->website ?? $token->website_url;
+                $token->twitter_url = $candidate->links->twitter ?? $token->twitter_url;
+                $token->telegram_url = $candidate->links->telegram ?? $token->telegram_url;
+                $token->image_url = $candidate->links->image ?? $token->image_url;
+                $token->metadata_updated_at = $observedAt;
+            }
+
             if ($candidate->earliestPairCreatedAt !== null) {
                 $token->earliest_pair_created_at = $candidate->earliestPairCreatedAt;
             }

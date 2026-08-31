@@ -4,14 +4,18 @@ declare(strict_types=1);
 
 namespace App\DTOs\DexScreener;
 
+use App\Models\HistoricalPeakEvidence;
 use Carbon\CarbonImmutable;
 
 /**
- * A token that passed Sprint 1 eligibility: age <= 30 days AND
- * observed_peak_market_cap >= threshold.
+ * A token that passed Sprint 1 eligibility: age <= 30 days AND a VERIFIED /
+ * OBSERVED market cap has reached the threshold — via CURRENT_OBSERVATION or
+ * HISTORICAL_VERIFIED. HISTORICAL_ESTIMATE (FDV basis) does NOT qualify.
  *
- * Combines the current observation ({@see TokenCandidateData}) with the peak
- * figures persisted on the Token record.
+ * Combines the current observation ({@see TokenCandidateData}), OUR OWN observed
+ * peak (from the Token record), and the historical-qualification determination
+ * ({@see HistoricalPeakEvidence}). `observed_peak_market_cap` and
+ * the `qualification_*` figures are kept explicitly distinct.
  */
 final readonly class QualifiedCandidate
 {
@@ -20,6 +24,11 @@ final readonly class QualifiedCandidate
         public ?float $observedPeakMarketCap,
         public ?CarbonImmutable $observedPeakMarketCapAt,
         public CarbonImmutable $observedSince,
+        public string $qualificationStatus,
+        public ?float $qualificationPeakValue,
+        public ?CarbonImmutable $qualificationPeakAt,
+        public ?string $qualificationSource,
+        public ?string $qualificationBasis,
     ) {}
 
     /**
@@ -40,6 +49,13 @@ final readonly class QualifiedCandidate
             'observed_peak_market_cap' => $this->observedPeakMarketCap,
             'observed_peak_market_cap_at' => $this->observedPeakMarketCapAt?->toIso8601String(),
             'observed_since' => $this->observedSince->toIso8601String(),
+
+            // Historical qualification — NOT the same as observed_peak_market_cap.
+            'qualification_status' => $this->qualificationStatus,
+            'qualification_peak_value' => $this->qualificationPeakValue,
+            'qualification_peak_at' => $this->qualificationPeakAt?->toIso8601String(),
+            'qualification_source' => $this->qualificationSource,
+            'qualification_basis' => $this->qualificationBasis,
 
             'fdv' => $c->fdv,
             'liquidity_usd' => $c->liquidityUsd,

@@ -18,7 +18,7 @@ final readonly class DiscoveryResult
 {
     /**
      * @param  list<QualifiedCandidate>  $candidates  Qualified + limited.
-     * @param  array<string,int>  $diagnostics  Funnel counts.
+     * @param  array<string,mixed>  $diagnostics  Funnel counts + coverage metrics (a few values are `array<string,int>`).
      * @param  list<array<string,mixed>>  $notQualifiedSample  {token_key, chain_id, symbol, reason, current_market_cap, fdv, observed_peak_market_cap, age_days}.
      * @param  int|null  $ingestionRunId  The `ingestion_runs` row for this run.
      */
