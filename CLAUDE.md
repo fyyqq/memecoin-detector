@@ -102,7 +102,7 @@ memecoin-detector/
 │   │   ├── api/         memecoins.ts, memecoinDetail.ts (Laravel only)
 │   │   ├── types/       memecoin.ts, memecoinDetail.ts
 │   │   ├── lib/         format.ts ($74.6M / 8d / % / timestamps)
-│   │   ├── components/  MemecoinTable, ChainFilter, CopyAddress, MarketCapSparkline
+│   │   ├── components/  MemecoinTable, ChainFilter, CopyAddress, MarketCapSparkline, RecentlyCrossedSection
 │   │   ├── pages/       Dashboard.tsx, MemecoinDetail.tsx
 │   │   └── App.tsx      React Router: / and /memecoin/:chainId/:tokenAddress
 │   ├── vite.config.ts  host: true, port 5180
@@ -371,6 +371,7 @@ only — do **not** create them yet.
 | `PumpEvent`      | One detected significant upward move in a token's OBSERVATION SERIES (our ~10-min snapshots — an "observed pump", not tick-level). `started/peak/ended_at`, `start/peak_market_cap`, `start/peak_price_usd`, `market_cap_change_pct`, `price_change_pct`, `volume_h24_change_ratio` + `txns_h24_change_ratio` (ROLLING 24h ratios, not interval), `duration_minutes`, `detection_score` (0–100 strength, not a prediction), `confidence` (low/medium/high), `status` (active/completed), `evidence_collected_at` (evidence-engine cooldown). `hasMany Evidence`. | **implemented (Step 16A)** |
 | `Evidence`       | One timestamped FACT present around a `PumpEvent` (Step 16B) — `category` (`MARKET`/`TOKEN_METADATA`/`ORIGIN`/`NEWS`/`RELATED_TOKEN`; `LISTING`/`COMMUNITY` reserved), `source`, `source_url`, `title`, `observed_at`, `published_at`, `relevance_score` (0–100, investigative relevance NOT causation probability), `confidence` (low/medium/high), `summary` (neutral one-sentence fact), `raw_reference` (short id/domain/hash — no payload JSON), `dedupe_hash`. `belongsTo PumpEvent` + `belongsTo Token`. Stored SEPARATELY from interpretation — never asserts causality. See [docs/evidence-engine.md](docs/evidence-engine.md). | **implemented (Step 16B)** |
 | `PumpExplanation` | One AI-generated, evidence-grounded interpretation per `PumpEvent` (Step 16C) — `status` (`pending`/`completed`/`failed`), `summary`, `primary_catalyst` (fixed enum incl. `UNKNOWN`), `confidence` (low/medium/high), `explanation_json` (full validated structure: summary / secondary_signals / evidence / caveats / unknowns — every claim cites evidence ids), `evidence_count`, `model_provider`, `model_name`, `error_message`, `generated_at`. Unique on `pump_event_id`; upserted on regeneration. The LLM INTERPRETS stored `Evidence` — never adds facts, never asserts causality. `belongsTo PumpEvent`. See [docs/pump-explanation.md](docs/pump-explanation.md). | **implemented (Step 16C)** |
+| `QualificationEvent` | One "$5M crossing" per token per `type` (Step 20) — `type` (`CURRENT_OBSERVATION`/`HISTORICAL_VERIFIED`), `crossed_at` (earliest snapshot ≥ $5M, or earliest CoinGecko-verified ≥ $5M point — candled, never a tick), `threshold_usd`, `evidence_status`, `source` (`dexscreener`/`coingecko`), `market_cap_value`. **Unique on `(token_id, type)`** → idempotent scheduler re-runs; `crossed_at` never rewritten. `HISTORICAL_ESTIMATE`/`UNKNOWN` produce NO event. Only a verified/observed peak in `[$5M, $200M]` gets one. A token can hold both types; representative = `HISTORICAL_VERIFIED` > `CURRENT_OBSERVATION` (the other row preserved). Written ONLY by the pipeline (`QualificationEventRecorder`) — never a read API, never a snapshot scan on GET. `belongsTo Token` / `Token hasMany`. See [docs/qualification-events.md](docs/qualification-events.md). | **implemented (Step 20)** |
 | `MonthlyRanking` | Preserved Top-N leaders for a calendar month. | future |
 
 ## Processing pipeline (concept)
@@ -419,6 +420,11 @@ In scope:
    historical observation", never "never crossed $5M".
 7. Display detected trending candidates in the React dashboard, showing the data
    source and retrieval timestamp.
+8. (Step 20) Record **when** each token crossed the $5M floor
+   (`qualification_events` — `CURRENT_OBSERVATION` / `HISTORICAL_VERIFIED` only,
+   never an estimate) and surface a **"Recently Crossed $5M"** dashboard section
+   + detail-page qualification timeline. The $5M/$200M/age/volume/liquidity rules
+   are unchanged.
 
 Same pipeline runs two ways — HTTP `GET /api/memecoins/discover` (`trigger=manual`)
 and the scheduled command `php artisan memecoins:discover` (`trigger=scheduled`,
@@ -426,7 +432,8 @@ every 10 min via Laravel's scheduler, `withoutOverlapping()`): DISCOVER (trendin
 meta → profiles → boosts → keyword fallback) → PRE-FILTER (on meta market data,
 before enrichment) → DEDUPE → PRIORITIZE → ENRICH → NORMALIZE → AGE FILTER →
 PERSIST TOKEN + SNAPSHOT → UPDATE OBSERVED PEAK → CURRENT OBSERVATION CHECK →
-HISTORICAL LOOKUP → QUALIFICATION ($5M–$200M band) → PERSIST EVIDENCE.
+HISTORICAL LOOKUP → QUALIFICATION ($5M–$200M band) → RECORD QUALIFICATION EVENTS
+(Step 20 — "$5M crossing") → PERSIST EVIDENCE.
 Each run is recorded in `ingestion_runs`. No queue / Redis / Horizon —
 synchronous execution. Details:
 [docs/sprint-1-discovery.md](docs/sprint-1-discovery.md).
@@ -537,9 +544,25 @@ Explicitly **excluded** from Sprint 1:
   `current_market_cap` or `market_cap`, never `fdv_total_supply`) — kept DISTINCT
   from `observed_peak_market_cap`. **`HISTORICAL_ESTIMATE` and `UNKNOWN` are
   excluded.** `meta.filters` carries `observed_peak_market_cap_min_usd` +
-  `observed_peak_market_cap_max_usd`. Sorted by
-  `GREATEST(observed_peak, historical_peak_value)` DESC.
-  `?chain=` / `?limit=` (default 20, max 50). ≤ 3 queries, no N+1.
+  `observed_peak_market_cap_max_usd`. Step 20 adds per-row
+  `qualification_crossed_at` / `qualification_crossing_type` / `recently_crossed`
+  (from the representative `QualificationEvent`; `null`/`false` when none
+  recorded), `meta.sort` + `meta.recent_crossing_hours`, and `?sort=` — default
+  **`peak_market_cap`** (`GREATEST(observed_peak, historical_peak_value)` DESC),
+  or `recent_crossing` (representative `crossed_at` DESC, no-crossing tokens
+  last). Default stays peak-ranked: the dashboard's "Recently Crossed $5M"
+  section already serves recency. `?chain=` / `?limit=` (default 20, max 50).
+  ≤ 3 queries + 1 for the events, no N+1.
+- **Read API `GET /api/memecoins/recently-crossed`** (Step 20) — read-only,
+  PostgreSQL only, never calls DexScreener / CoinGecko / GeckoTerminal, never
+  writes, never creates an event. Returns currently-**qualified** tokens (age
+  ≤ 30d, verified/observed peak in `[$5M, $200M]`) whose **representative**
+  `QualificationEvent.crossed_at` is within the window (default 48h,
+  `MEMECOIN_RECENT_CROSSING_HOURS`; `?hours=` 1…168 =
+  `MEMECOIN_RECENT_CROSSING_MAX_HOURS`; optional `?chain=`), newest crossing
+  first. **A token with current MC below $5M still appears** — the floor is a
+  peak rule. Rows carry `status` `ACTIVE` (current MC ≥ $5M) / `COOLED` (< $5M) —
+  never alarmist. `config('dexscreener.recent_crossing.*')`.
 - **Detail API `GET /api/memecoins/{chainId}/{tokenAddress}`** — read-only,
   PostgreSQL only, never calls DexScreener / CoinGecko / GeckoTerminal. Identity
   is `(chain_id, token_address)`, never the symbol. **Nested response** (Step 15):
@@ -555,14 +578,20 @@ Explicitly **excluded** from Sprint 1:
   `pair`, `snapshots` (≤ 50, newest first), `pump_intelligence` (Step 16C — ≤ 10 recent
   pump events, each with its persisted AI `explanation` + `presented` prose +
   `cited_evidence`; `status: "pending"` when not yet generated; **never triggers
-  AI generation**), `provenance`. **Dashboard qualification is NOT an existence
-  gate** — any stored `Token` resolves. Miss →
-  `404 {"error": "Memecoin not found."}`. ≤ 6 queries, no N+1.
-- **React dashboard** ("30-Day Leaders") reads `GET /api/memecoins` only —
-  table, chain filter, Refresh + 60s auto-refresh, loading/empty/error states,
-  provenance notes. Rows link to the detail page; each row has a
-  copy-contract-address button and a compact `CURRENT`/`VERIFIED`/`ESTIMATE`
-  qualification badge. Never talks to DexScreener.
+  AI generation**), **`qualification_timeline`** (Step 20 — representative
+  `crossed_at` / `crossing_type` / `crossing_source` / `crossing_market_cap_value`
+  / `recently_crossed` / `currently_below_threshold` / `threshold_usd` / `events[]`;
+  all-null / empty when no crossing recorded), `provenance`. **Dashboard
+  qualification is NOT an existence gate** — any stored `Token` resolves. Miss →
+  `404 {"error": "Memecoin not found."}`. ≤ 8 queries, no N+1.
+- **React dashboard** reads `GET /api/memecoins` + `GET /api/memecoins/recently-crossed`
+  only. **Two sections** (Step 20): **🔥 Recently Crossed $5M** (compact card
+  list — Token / Chain / Crossed / Current MC / Peak MC / `ACTIVE`|`COOLED`)
+  above the existing **30-Day Qualified Memecoins** table (chain filter, Sort
+  control Peak market cap / Recent crossing, Refresh + 60s auto-refresh,
+  loading/empty/error states, provenance notes). Rows link to the detail page;
+  each row has a copy-contract-address button and a compact
+  `CURRENT`/`VERIFIED`/`ESTIMATE` badge (unchanged). Never talks to DexScreener.
 - **React token detail page** (`/memecoin/:chainId/:tokenAddress`, React Router)
   reads `GET /api/memecoins/{chainId}/{tokenAddress}` only (for data). Sections:
   header (middle-truncated CA + copy + back link), **live market chart** (Step 17
@@ -571,7 +600,10 @@ Explicitly **excluded** from Sprint 1:
   → "Live chart unavailable"), market overview (stat cards incl. **Observed Peak
   MC vs Qualification Peak**, ESTIMATE → "Estimated — FDV basis"), **"Why is this
   token on the list?"** (status-coloured evidence card — UNKNOWN never "did not
-  reach $5M"), **pump events** (Step 16A–C — timeline `started→peak` / MC % /
+  reach $5M"), **"Qualification timeline"** (Step 20 — Crossed $5M / Crossing
+  type / MC at crossing / Current MC / Peak MC; below-$5M → "remains qualified
+  because it previously crossed", never "currently above"; placeholder when none
+  recorded), **pump events** (Step 16A–C — timeline `started→peak` / MC % /
   price % / detection score+confidence / status, each expands to the persisted
   AI "why did this coin pump?" explanation with expandable cited evidence;
   `pending`/`failed`/`UNKNOWN` show neutral notes, never a guessed reason),
@@ -634,6 +666,24 @@ Explicitly **excluded** from Sprint 1:
   catalyst established", never "we don't know"). **The read API never calls the
   provider** — generation is CLI/scheduler only. `ANTHROPIC_API_KEY` server-side
   only. Config: `config/ai.php`. Docs: `docs/pump-explanation.md`.
+- **Qualification events / "Recently Crossed $5M" (Step 20)** — the discovery
+  pipeline gains a `RECORD QUALIFICATION EVENTS` step (after QUALIFICATION,
+  before PERSIST EVIDENCE): `QualificationEventRecorder` upserts a
+  `qualification_events` row per token per crossing `type`
+  (`CURRENT_OBSERVATION` = earliest snapshot ≥ $5M; `HISTORICAL_VERIFIED` =
+  earliest CoinGecko-verified ≥ $5M point, from the new
+  `historical_peak_evidences.first_verified_crossing_at`). `HISTORICAL_ESTIMATE`
+  / `UNKNOWN` produce **no** event; only a verified/observed peak in
+  `[$5M, $200M]` qualifies. `(token_id, type)` unique → idempotent, `crossed_at`
+  never rewritten. Representative crossing = `HISTORICAL_VERIFIED` >
+  `CURRENT_OBSERVATION`. Read APIs never create an event or scan snapshots.
+  Surfaces on `GET /api/memecoins` (`qualification_crossed_at` /
+  `qualification_crossing_type` / `recently_crossed`, `?sort=recent_crossing`),
+  the new `GET /api/memecoins/recently-crossed`, and the detail
+  `qualification_timeline`. Backfill is lazy — a pre-Step-20 token gets its event
+  the next time it's rediscovered while still age-eligible. Config:
+  `config/dexscreener.php` → `recent_crossing.*`. Docs:
+  `docs/qualification-events.md`.
 - Tables: `tokens`, `market_snapshots`, `ingestion_runs`,
-  `historical_peak_evidences`, `pump_events`, `evidences`, `pump_explanations`.
-  No queue / trend score / related-token graph / auth.
+  `historical_peak_evidences`, `pump_events`, `evidences`, `pump_explanations`,
+  `qualification_events`. No queue / trend score / related-token graph / auth.

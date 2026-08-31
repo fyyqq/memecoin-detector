@@ -79,6 +79,33 @@ class Token extends Model
     }
 
     /**
+     * "$5M crossing" events for this token (Step 20). At most one row per type
+     * (CURRENT_OBSERVATION / HISTORICAL_VERIFIED).
+     *
+     * @return HasMany<QualificationEvent, $this>
+     */
+    public function qualificationEvents(): HasMany
+    {
+        return $this->hasMany(QualificationEvent::class);
+    }
+
+    /**
+     * The representative "$5M crossing" — the strongest evidence available:
+     * HISTORICAL_VERIFIED over CURRENT_OBSERVATION. Reads the eager-loaded
+     * `qualificationEvents` relation (no query); null when none recorded.
+     */
+    public function representativeQualificationEvent(): ?QualificationEvent
+    {
+        if (! $this->relationLoaded('qualificationEvents')) {
+            return null;
+        }
+
+        return $this->qualificationEvents
+            ->sort(fn (QualificationEvent $a, QualificationEvent $b): int => $a->precedenceRank() <=> $b->precedenceRank())
+            ->first();
+    }
+
+    /**
      * The most recent observation for this token. Uses a window-function
      * subquery so it can be eager-loaded without N+1.
      *

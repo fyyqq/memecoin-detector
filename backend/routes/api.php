@@ -4,6 +4,7 @@ use App\Http\Controllers\Api\MemecoinDetailController;
 use App\Http\Controllers\Api\MemecoinDiscoveryController;
 use App\Http\Controllers\Api\MemecoinDiscoveryStatusController;
 use App\Http\Controllers\Api\MemecoinListController;
+use App\Http\Controllers\Api\RecentlyCrossedController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/health', function () {
@@ -20,6 +21,11 @@ Route::get('/memecoins/discover', MemecoinDiscoveryController::class);
 // Read-only discovery-coverage report — PostgreSQL (ingestion_runs) only, never
 // calls DexScreener.
 Route::get('/memecoins/discovery-status', MemecoinDiscoveryStatusController::class);
+
+// Read-only "Recently Crossed $5M" feed (Step 20) — PostgreSQL only, never calls
+// DexScreener / CoinGecko / GeckoTerminal. Defined before the {chainId}/{tokenAddress}
+// route so the literal segment always wins.
+Route::get('/memecoins/recently-crossed', RecentlyCrossedController::class);
 
 // Read-only token detail — PostgreSQL only, never calls DexScreener. Identity is
 // (chainId, tokenAddress); dashboard qualification is NOT applied here.

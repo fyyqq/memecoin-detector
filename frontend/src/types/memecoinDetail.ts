@@ -23,6 +23,37 @@ export interface MemecoinQualification {
   ineligible_reason: string | null
 }
 
+/** The kind of "$5M crossing" recorded for a token (Step 20). */
+export type CrossingType = 'CURRENT_OBSERVATION' | 'HISTORICAL_VERIFIED'
+
+/** One recorded "$5M crossing" in `data.qualification_timeline.events`. */
+export interface QualificationCrossingEvent {
+  type: CrossingType
+  crossed_at: string | null
+  /** dexscreener | coingecko | null */
+  source: string | null
+  market_cap_value: number | null
+}
+
+/**
+ * `data.qualification_timeline` (Step 20) — WHEN / HOW the token first cleared
+ * $5M. All-null / empty `events` when no crossing has been recorded.
+ */
+export interface MemecoinQualificationTimeline {
+  /** Representative crossing (HISTORICAL_VERIFIED over CURRENT_OBSERVATION). */
+  crossed_at: string | null
+  crossing_type: CrossingType | null
+  /** dexscreener | coingecko | null */
+  crossing_source: string | null
+  crossing_market_cap_value: number | null
+  /** crossed_at within the configured recent window (default 48h). */
+  recently_crossed: boolean
+  /** latest snapshot MC is below $5M (the token stays qualified anyway). */
+  currently_below_threshold: boolean | null
+  threshold_usd: number
+  events: QualificationCrossingEvent[]
+}
+
 /**
  * `data.historical_estimate` — a GeckoTerminal FDV-basis estimate. Informational
  * ONLY. Never a market cap, never qualifies the token for the main list. Null
@@ -199,6 +230,8 @@ export interface MemecoinDetail {
   age_days: number | null
 
   qualification: MemecoinQualification
+  /** "$5M crossing" timeline (Step 20). */
+  qualification_timeline: MemecoinQualificationTimeline
   /** FDV-basis estimate — informational only. Null unless one exists. */
   historical_estimate: MemecoinHistoricalEstimate | null
   observed: MemecoinObserved

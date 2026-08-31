@@ -9,6 +9,7 @@ use App\Models\HistoricalPeakEvidence;
 use App\Models\MarketSnapshot;
 use App\Models\PumpEvent;
 use App\Models\PumpExplanation;
+use App\Models\QualificationEvent;
 use App\Models\Token;
 use App\Services\AI\PumpExplanationPresenter;
 use Carbon\CarbonImmutable;
@@ -65,6 +66,11 @@ class MemecoinDetailResource extends JsonResource
             'age_days' => $this->ageDays(),
 
             'qualification' => $qualification,
+
+            // Step 20 — the "$5M crossing" timeline (when / how the token first
+            // cleared the threshold). Empty `events` + null fields when no
+            // crossing has been recorded (the read API never creates one).
+            'qualification_timeline' => $this->qualificationTimeline($snapshot?->market_cap),
 
             // Secondary informational signal — an estimated historical FDV, NOT
             // a verified/observed market cap. null unless a HISTORICAL_ESTIMATE
@@ -198,6 +204,52 @@ class MemecoinDetailResource extends JsonResource
             'basis' => null,
             'confidence' => null,
             'ineligible_reason' => $aboveCeiling ? 'peak_above_ceiling' : null,
+        ];
+    }
+
+    /**
+     * The "$5M crossing" timeline (Step 20).
+     *
+     *   crossed_at / crossing_type / crossing_source / crossing_market_cap_value
+     *     come from the REPRESENTATIVE event (HISTORICAL_VERIFIED over
+     *     CURRENT_OBSERVATION).
+     *   currently_below_threshold — the latest snapshot MC is under $5M (the
+     *     token stays qualified anyway; the floor is a peak rule).
+     *   events — every recorded crossing, strongest first.
+     *
+     * All-null / empty when no crossing has been recorded. The read API never
+     * creates a crossing.
+     *
+     * @return array{crossed_at:?string,crossing_type:?string,crossing_source:?string,crossing_market_cap_value:?float,recently_crossed:bool,currently_below_threshold:?bool,threshold_usd:int,events:list<array<string,mixed>>}
+     */
+    private function qualificationTimeline(?float $currentMarketCap): array
+    {
+        $floor = (int) config('dexscreener.filters.observed_peak_market_cap_min_usd');
+        $hours = (int) config('dexscreener.recent_crossing.hours');
+        $cutoff = CarbonImmutable::now()->subHours($hours);
+
+        /** @var Collection<int, QualificationEvent> $events */
+        $events = ($this->relationLoaded('qualificationEvents') ? $this->qualificationEvents : collect())
+            ->sort(fn ($a, $b): int => $a->precedenceRank() <=> $b->precedenceRank())
+            ->values();
+
+        $representative = $events->first();
+
+        return [
+            'crossed_at' => $representative?->crossed_at?->toIso8601String(),
+            'crossing_type' => $representative?->type,
+            'crossing_source' => $representative?->source,
+            'crossing_market_cap_value' => $representative?->market_cap_value,
+            'recently_crossed' => $representative?->crossed_at !== null
+                && $representative->crossed_at->greaterThanOrEqualTo($cutoff),
+            'currently_below_threshold' => $currentMarketCap === null ? null : $currentMarketCap < $floor,
+            'threshold_usd' => $floor,
+            'events' => $events->map(fn ($event): array => [
+                'type' => $event->type,
+                'crossed_at' => $event->crossed_at?->toIso8601String(),
+                'source' => $event->source,
+                'market_cap_value' => $event->market_cap_value,
+            ])->all(),
         ];
     }
 

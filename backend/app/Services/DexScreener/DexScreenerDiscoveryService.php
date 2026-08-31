@@ -10,6 +10,7 @@ use App\Models\HistoricalPeakEvidence;
 use App\Models\IngestionRun;
 use App\Models\Token;
 use App\Services\Historical\HistoricalQualificationService;
+use App\Services\Historical\QualificationEventRecorder;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -49,6 +50,7 @@ class DexScreenerDiscoveryService
         private readonly DexScreenerNormalizer $normalizer,
         private readonly TokenObservationService $observations,
         private readonly HistoricalQualificationService $historical,
+        private readonly QualificationEventRecorder $qualificationEvents,
         private readonly SearchTermEngine $searchTerms,
     ) {}
 
@@ -211,6 +213,9 @@ class DexScreenerDiscoveryService
             'not_qualified' => 0,
             'observed_peak_below_threshold' => 0,
             'not_qualified_fdv_estimate_only' => 0,
+            // Step 20 — "$5M crossing" events.
+            'qualification_events_created' => 0,
+            'qualification_events_existing' => 0,
             // Step 19 — cleared the floor but peaked above the $200M ceiling.
             'not_qualified_peak_above_ceiling' => 0,
             // historical qualification (filled by HistoricalQualificationService)
@@ -410,6 +415,26 @@ class DexScreenerDiscoveryService
                     'sources' => $dto->sources,
                 ];
             }
+        }
+
+        // 6b. QUALIFICATION EVENTS (Step 20) — record a "$5M crossing" for every
+        // token whose evidence proves a VERIFIED / OBSERVED crossing of the
+        // floor. Idempotent; the $200M ceiling is a list concern, not a crossing
+        // concern (a token keeps its historical record either way).
+        $eventStats = $this->qualificationEvents->recordBatch(
+            array_map(
+                static fn (array $e): array => [
+                    'token' => $e['token'],
+                    'evidence' => $evidenceByToken[$e['token']->id] ?? null,
+                ],
+                $ageEligible,
+            ),
+            $now,
+            $peakMin,
+            $peakMax,
+        );
+        foreach ($eventStats as $statKey => $statValue) {
+            $diagnostics[$statKey] = $statValue;
         }
 
         // Highest qualifying peak first, then youngest.

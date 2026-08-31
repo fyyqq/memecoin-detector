@@ -69,6 +69,7 @@ class HistoricalPeakEvidence extends Model
         'status',
         'peak_value_usd',
         'peak_observed_at',
+        'first_verified_crossing_at',
         'evidence_source',
         'evidence_basis',
         'source_reference',
@@ -84,6 +85,7 @@ class HistoricalPeakEvidence extends Model
         return [
             'peak_value_usd' => 'float',
             'peak_observed_at' => 'immutable_datetime',
+            'first_verified_crossing_at' => 'immutable_datetime',
             'historical_window_start' => 'immutable_datetime',
             'historical_window_end' => 'immutable_datetime',
             'checked_at' => 'immutable_datetime',

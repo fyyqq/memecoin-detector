@@ -1,4 +1,8 @@
-import type { MemecoinListResponse, MemecoinQuery } from '../types/memecoin'
+import type {
+  MemecoinListResponse,
+  MemecoinQuery,
+  RecentlyCrossedResponse,
+} from '../types/memecoin'
 
 const API_BASE_URL = (import.meta.env.VITE_API_URL ?? 'http://localhost:8010').replace(/\/$/, '')
 
@@ -22,9 +26,31 @@ export async function fetchMemecoins(
   const params = new URLSearchParams()
   if (query.chain) params.set('chain', query.chain)
   if (query.limit) params.set('limit', String(query.limit))
+  if (query.sort) params.set('sort', query.sort)
 
   const url = `${API_BASE_URL}/api/memecoins${params.toString() ? `?${params}` : ''}`
 
+  return getJson<MemecoinListResponse>(url, signal)
+}
+
+/**
+ * Fetch the "Recently Crossed $5M" feed. Laravel-only, PostgreSQL-only — never
+ * DexScreener. `hours` widens/narrows the window (server max 168).
+ */
+export async function fetchRecentlyCrossed(
+  hours?: number,
+  signal?: AbortSignal,
+): Promise<RecentlyCrossedResponse> {
+  const params = new URLSearchParams()
+  if (hours) params.set('hours', String(hours))
+  const url = `${API_BASE_URL}/api/memecoins/recently-crossed${
+    params.toString() ? `?${params}` : ''
+  }`
+
+  return getJson<RecentlyCrossedResponse>(url, signal)
+}
+
+async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
   let response: Response
   try {
     response = await fetch(url, { headers: { Accept: 'application/json' }, signal })
@@ -38,7 +64,7 @@ export async function fetchMemecoins(
   }
 
   try {
-    return (await response.json()) as MemecoinListResponse
+    return (await response.json()) as T
   } catch {
     throw new MemecoinApiError('The memecoin API returned an unexpected response.')
   }

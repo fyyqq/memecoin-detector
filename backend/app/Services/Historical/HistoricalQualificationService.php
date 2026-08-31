@@ -240,6 +240,7 @@ class HistoricalQualificationService
                 'status' => HistoricalPeakEvidence::STATUS_HISTORICAL_VERIFIED,
                 'peak_value_usd' => $cg->peakMarketCapUsd,
                 'peak_observed_at' => $cg->peakAt,
+                'first_verified_crossing_at' => $cg->firstCrossingAt ?? $cg->peakAt,
                 'evidence_source' => HistoricalPeakEvidence::SOURCE_COINGECKO,
                 'evidence_basis' => HistoricalPeakEvidence::BASIS_MARKET_CAP,
                 'source_reference' => 'coingecko:'.$cg->coinId,

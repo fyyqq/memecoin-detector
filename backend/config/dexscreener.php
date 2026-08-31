@@ -141,6 +141,17 @@ return [
     ],
 
     /*
+    | "Recently Crossed $5M" (Step 20). A token counts as recently_crossed when
+    | its representative crossing event's `crossed_at` is within this many hours
+    | of now. `GET /api/memecoins/recently-crossed?hours=` may override the
+    | default up to `max_hours`.
+    */
+    'recent_crossing' => [
+        'hours' => max(1, (int) env('MEMECOIN_RECENT_CROSSING_HOURS', 48)),
+        'max_hours' => max(1, (int) env('MEMECOIN_RECENT_CROSSING_MAX_HOURS', 168)),
+    ],
+
+    /*
     | Safety ceilings so a large ?limit= cannot blow up the fan-out.
     */
     'limits' => [

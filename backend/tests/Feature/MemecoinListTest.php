@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Models\HistoricalPeakEvidence;
+use App\Models\QualificationEvent;
 use App\Models\Token;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -301,6 +302,82 @@ class MemecoinListTest extends TestCase
     }
 
     #[Test]
+    public function it_exposes_the_crossing_fields_and_defaults_to_peak_market_cap_sort(): void
+    {
+        $token = $this->makeToken(['symbol' => 'CROSSED', 'observed_peak_market_cap' => 9_000_000.0]);
+        QualificationEvent::query()->create([
+            'token_id' => $token->id,
+            'type' => QualificationEvent::TYPE_CURRENT_OBSERVATION,
+            'crossed_at' => $this->now->subHours(6),
+            'threshold_usd' => 5_000_000,
+            'evidence_status' => QualificationEvent::TYPE_CURRENT_OBSERVATION,
+            'source' => 'dexscreener',
+            'market_cap_value' => 6_000_000.0,
+        ]);
+
+        $res = $this->getJson('/api/memecoins')->assertOk();
+
+        $res->assertJsonPath('meta.sort', 'peak_market_cap');
+        $res->assertJsonPath('meta.recent_crossing_hours', 48);
+        $res->assertJsonPath('data.0.qualification_crossing_type', 'CURRENT_OBSERVATION');
+        $res->assertJsonPath('data.0.qualification_crossed_at', $this->now->subHours(6)->toIso8601String());
+        $res->assertJsonPath('data.0.recently_crossed', true);
+    }
+
+    #[Test]
+    public function a_token_with_no_recorded_crossing_reports_null_crossing_fields(): void
+    {
+        $this->makeToken(['symbol' => 'NOCROSS', 'observed_peak_market_cap' => 9_000_000.0]);
+
+        $res = $this->getJson('/api/memecoins')->assertOk();
+
+        $res->assertJsonPath('data.0.qualification_crossed_at', null);
+        $res->assertJsonPath('data.0.qualification_crossing_type', null);
+        $res->assertJsonPath('data.0.recently_crossed', false);
+    }
+
+    #[Test]
+    public function sort_recent_crossing_orders_by_newest_crossing_and_peak_market_cap_still_works(): void
+    {
+        $mk = function (string $symbol, float $peak, ?CarbonImmutable $crossedAt): Token {
+            $token = $this->makeToken(['symbol' => $symbol, 'observed_peak_market_cap' => $peak]);
+            if ($crossedAt !== null) {
+                QualificationEvent::query()->create([
+                    'token_id' => $token->id,
+                    'type' => QualificationEvent::TYPE_CURRENT_OBSERVATION,
+                    'crossed_at' => $crossedAt,
+                    'threshold_usd' => 5_000_000,
+                    'evidence_status' => QualificationEvent::TYPE_CURRENT_OBSERVATION,
+                    'source' => 'dexscreener',
+                    'market_cap_value' => $peak,
+                ]);
+            }
+
+            return $token;
+        };
+
+        $mk('BIGPEAK_OLDCROSS', 90_000_000.0, $this->now->subDays(3));
+        $mk('SMALLPEAK_NEWCROSS', 6_000_000.0, $this->now->subHours(2));
+        $mk('MIDPEAK_MIDCROSS', 20_000_000.0, $this->now->subHours(20));
+        $mk('NOCROSS', 40_000_000.0, null);
+
+        $recent = $this->getJson('/api/memecoins?sort=recent_crossing')->assertOk();
+        $recent->assertJsonPath('meta.sort', 'recent_crossing');
+        $this->assertSame(
+            ['SMALLPEAK_NEWCROSS', 'MIDPEAK_MIDCROSS', 'BIGPEAK_OLDCROSS', 'NOCROSS'],
+            collect($recent->json('data'))->pluck('symbol')->all(),
+        );
+
+        $peak = $this->getJson('/api/memecoins?sort=peak_market_cap')->assertOk();
+        $this->assertSame(
+            ['BIGPEAK_OLDCROSS', 'NOCROSS', 'MIDPEAK_MIDCROSS', 'SMALLPEAK_NEWCROSS'],
+            collect($peak->json('data'))->pluck('symbol')->all(),
+        );
+
+        $this->getJson('/api/memecoins?sort=bogus')->assertStatus(422);
+    }
+
+    #[Test]
     public function limit_works_and_is_clamped_to_the_server_maximum(): void
     {
         config()->set('dexscreener.limits.max_result_limit', 2);
@@ -338,6 +415,8 @@ class MemecoinListTest extends TestCase
             'meta' => [
                 'count' => 0,
                 'retrieved_at' => $this->now->toIso8601String(),
+                'sort' => 'peak_market_cap',
+                'recent_crossing_hours' => 48,
                 'filters' => [
                     'max_age_days' => 30,
                     'observed_peak_market_cap_min_usd' => 5000000,

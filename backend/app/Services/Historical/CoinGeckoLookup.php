@@ -26,11 +26,21 @@ final readonly class CoinGeckoLookup
         public ?CarbonImmutable $windowStart = null,
         public ?CarbonImmutable $windowEnd = null,
         public ?string $note = null,
+        // Step 20 — the EARLIEST verified point that cleared the $5M threshold
+        // (candled/sampled; not the exact tick). Feeds a HISTORICAL_VERIFIED
+        // crossing event's `crossed_at`. Null unless `outcome === 'verified'`.
+        public ?CarbonImmutable $firstCrossingAt = null,
     ) {}
 
-    public static function verified(string $coinId, float $peak, CarbonImmutable $at, ?CarbonImmutable $start, ?CarbonImmutable $end): self
-    {
-        return new self('verified', $coinId, $peak, $at, $start, $end);
+    public static function verified(
+        string $coinId,
+        float $peak,
+        CarbonImmutable $at,
+        ?CarbonImmutable $start,
+        ?CarbonImmutable $end,
+        ?CarbonImmutable $firstCrossingAt = null,
+    ): self {
+        return new self('verified', $coinId, $peak, $at, $start, $end, firstCrossingAt: $firstCrossingAt);
     }
 
     public static function notFound(): self

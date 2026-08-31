@@ -878,3 +878,121 @@
     color: #d1d5db;
   }
 }
+
+/* --- Step 20: Recently Crossed $5M + Qualification timeline --------------- */
+
+.section-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 1.5rem 0 0.5rem;
+}
+
+.section-heading h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.recently-crossed {
+  margin-bottom: 1.5rem;
+}
+
+.qualified-list {
+  margin-top: 1rem;
+}
+
+.sort-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  color: #6b7280;
+}
+
+.sort-control select {
+  font: inherit;
+  padding: 0.15rem 0.35rem;
+}
+
+.crossing-status {
+  padding: 0.05rem 0.4rem;
+  border-radius: 4px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.crossing-status-active {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.crossing-status-cooled {
+  background: #e5e7eb;
+  color: #374151;
+}
+
+.crossing-tag {
+  margin-left: 0.35rem;
+  padding: 0.02rem 0.3rem;
+  border-radius: 3px;
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  background: #e0e7ff;
+  color: #3730a3;
+}
+
+.timeline-card {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+  background: #f9fafb;
+}
+
+.timeline-note {
+  margin-top: 0.75rem;
+}
+
+.timeline-events {
+  margin-top: 1rem;
+}
+
+.timeline-events h3 {
+  font-size: 0.85rem;
+  margin: 0 0 0.4rem;
+}
+
+.timeline-events ul {
+  margin: 0 0 0.5rem;
+  padding-left: 1.1rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  .sort-control {
+    color: #9ca3af;
+  }
+
+  .crossing-status-active {
+    background: #14532d;
+    color: #bbf7d0;
+  }
+
+  .crossing-status-cooled {
+    background: #374151;
+    color: #d1d5db;
+  }
+
+  .crossing-tag {
+    background: #312e81;
+    color: #c7d2fe;
+  }
+
+  .timeline-card {
+    border-color: #374151;
+    background: #111827;
+  }
+}

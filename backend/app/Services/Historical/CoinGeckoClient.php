@@ -112,6 +112,7 @@ class CoinGeckoClient
 
         $peak = null;
         $peakAt = null;
+        $firstCrossingAt = null;
         foreach ($points as $point) {
             if (! is_array($point) || count($point) < 2) {
                 continue;
@@ -120,11 +121,17 @@ class CoinGeckoClient
             if ($value <= 0.0) {
                 continue;
             }
+            $at = is_numeric($point[0] ?? null)
+                ? CarbonImmutable::createFromTimestampMs((int) $point[0])
+                : null;
             if ($peak === null || $value > $peak) {
                 $peak = $value;
-                $peakAt = is_numeric($point[0] ?? null)
-                    ? CarbonImmutable::createFromTimestampMs((int) $point[0])
-                    : null;
+                $peakAt = $at;
+            }
+            // Earliest sampled point at or above the threshold. The series is
+            // chronological, so the first match is the earliest.
+            if ($firstCrossingAt === null && $value >= $threshold && $at !== null) {
+                $firstCrossingAt = $at;
             }
         }
 
@@ -141,7 +148,14 @@ class CoinGeckoClient
             );
         }
 
-        return CoinGeckoLookup::verified($coinId, $peak, $peakAt ?? $windowEnd, $windowStart, $windowEnd);
+        return CoinGeckoLookup::verified(
+            $coinId,
+            $peak,
+            $peakAt ?? $windowEnd,
+            $windowStart,
+            $windowEnd,
+            $firstCrossingAt ?? $peakAt ?? $windowEnd,
+        );
     }
 
     public function callsMade(): int

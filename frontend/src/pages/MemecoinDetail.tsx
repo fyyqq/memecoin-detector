@@ -214,6 +214,11 @@ function DetailView({ detail, retrievedAt }: DetailViewProps) {
         <QualificationEvidence detail={detail} />
       </Section>
 
+      {/* 4b. QUALIFICATION TIMELINE */}
+      <Section title="Qualification timeline">
+        <QualificationTimeline detail={detail} />
+      </Section>
+
       {/* 5. PUMP EVENTS + EXPLANATIONS */}
       <Section title="Pump events">
         <PumpEvents events={detail.pump_intelligence.events} />
@@ -464,6 +469,74 @@ function QualificationEvidence({ detail }: { detail: MemecoinDetail }) {
         A market cap of $5M could not be verified or observed for this token with available data.
         This is <strong>not</strong> a claim that the token never reached $5M.
       </p>
+    </div>
+  )
+}
+
+function crossingTypeLabel(type: string | null): string {
+  switch (type) {
+    case 'CURRENT_OBSERVATION':
+      return 'Current observation (our own snapshot saw ≥ $5M)'
+    case 'HISTORICAL_VERIFIED':
+      return 'Historically verified crossing (CoinGecko)'
+    default:
+      return 'Not yet recorded'
+  }
+}
+
+function QualificationTimeline({ detail }: { detail: MemecoinDetail }) {
+  const t = detail.qualification_timeline
+  const currentMc = detail.latest.market_cap
+
+  if (!t.crossed_at) {
+    return (
+      <div className="placeholder-card">
+        <p className="placeholder-lead">No $5M crossing has been recorded for this token yet.</p>
+        <p className="muted">
+          A crossing is recorded when a verified or observed market cap clears $5M. This is
+          <strong> not</strong> a claim that the token never reached $5M.
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="timeline-card">
+      <div className="detail-grid">
+        <Field label="Crossed $5M">{formatDateTime(t.crossed_at)}</Field>
+        <Field label="Crossing type">{crossingTypeLabel(t.crossing_type)}</Field>
+        <Field label="MC at crossing">{show(t.crossing_market_cap_value, formatUsd)}</Field>
+        <Field label="Current MC">{show(currentMc, formatUsd)}</Field>
+        <Field label="Peak MC">
+          {show(detail.qualification.peak_value ?? detail.observed.peak_market_cap, formatUsd)}
+        </Field>
+        <Field label="Within recent window">{t.recently_crossed ? 'Yes' : 'No'}</Field>
+      </div>
+
+      {t.currently_below_threshold === true && (
+        <p className="muted timeline-note">
+          Current MC is below $5M, but the token remains qualified because it previously crossed
+          the threshold. The floor is a peak rule — we do not re-disqualify on the current price.
+        </p>
+      )}
+
+      {t.events.length > 1 && (
+        <div className="timeline-events">
+          <h3>All recorded crossings</h3>
+          <ul>
+            {t.events.map((event, index) => (
+              <li key={`${event.type}-${index}`}>
+                <strong>{crossingTypeLabel(event.type)}</strong> — {formatDateTime(event.crossed_at)}
+                {event.market_cap_value != null && <> ({formatUsd(event.market_cap_value)})</>}
+              </li>
+            ))}
+          </ul>
+          <p className="muted">
+            When a historically verified crossing exists, it is the representative one — the earlier
+            current-observation record is kept for the history.
+          </p>
+        </div>
+      )}
     </div>
   )
 }

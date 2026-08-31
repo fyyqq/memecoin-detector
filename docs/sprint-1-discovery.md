@@ -107,8 +107,8 @@ persistence:
 
 ```
 … → AGE FILTER → PERSIST TOKEN + SNAPSHOT
-  → CURRENT OBSERVATION CHECK → HISTORICAL LOOKUP → QUALIFICATION
-  → PERSIST EVIDENCE → RETURN
+  → CURRENT OBSERVATION CHECK → HISTORICAL LOOKUP → QUALIFICATION ($5M–$200M)
+  → RECORD QUALIFICATION EVENTS (Step 20) → PERSIST EVIDENCE → RETURN
 ```
 
 ### Evidence statuses
@@ -214,6 +214,40 @@ having failed to cross $5M — only that we have no verified history before
   this engine** and remains OUR OWN snapshot peak.
 
 Config: [`config/historical.php`](../backend/config/historical.php).
+
+---
+
+## Qualification Events — "Recently Crossed $5M" (Step 20)
+
+Records **when** a token first crossed the `$5M` floor so the dashboard can
+answer *"which tracked memecoins have most recently crossed $5M?"* — not just
+show a static ranking. **Nothing about the qualification universe changes.**
+
+The pipeline step `RECORD QUALIFICATION EVENTS` (after `QUALIFICATION`, before
+`PERSIST EVIDENCE`) upserts one `qualification_events` row per token per **type**:
+
+| `type` | `crossed_at` | `source` |
+|---|---|---|
+| `CURRENT_OBSERVATION` | earliest `market_snapshots.observed_at` with `market_cap ≥ $5M` | `dexscreener` |
+| `HISTORICAL_VERIFIED` | earliest CoinGecko verified `≥ $5M` point (`historical_peak_evidences.first_verified_crossing_at`, else `peak_observed_at`) — a *candled* "historically verified crossing", never an exact tick | `coingecko` |
+
+`HISTORICAL_ESTIMATE` and `UNKNOWN` produce **no** crossing event. Only tokens
+whose verified/observed peak sits in `[$5M, $200M]` get an event (same
+"qualified" definition as the main list). `(token_id, type)` is unique →
+repeated scheduler runs are idempotent and `crossed_at` is never rewritten. A
+token can hold both types; the **representative** crossing is the strongest
+(`HISTORICAL_VERIFIED > CURRENT_OBSERVATION`) and the other row is preserved.
+
+`App\Services\Historical\QualificationEventRecorder` — one query pre-loads the
+batch's existing events, one indexed snapshot query per new `CURRENT_OBSERVATION`
+crossing. Read APIs never create an event and never scan snapshots.
+
+Full detail (data model, precedence, ACTIVE/COOLED, the 48h window, limitations):
+[`docs/qualification-events.md`](qualification-events.md).
+
+Config: `config/dexscreener.php` → `recent_crossing.hours` (48) /
+`recent_crossing.max_hours` (168) ← `MEMECOIN_RECENT_CROSSING_HOURS` /
+`MEMECOIN_RECENT_CROSSING_MAX_HOURS`.
 
 ---
 
@@ -499,9 +533,12 @@ peaked **inside the `$5M`–`$200M` band** — via `observed_peak_market_cap >= 
 is not a market cap. A token whose verified/observed peak ever exceeded `$200M`
 is **excluded even if its current market cap has fallen back into the band** — we
 do not re-qualify on current MC. A token that dumped *below* `$5M` after an
-in-band peak **stays qualified** (the floor is a peak rule). Sorted by
-`GREATEST(observed_peak_market_cap, historical_peak_value)` DESC. No momentum
-scoring.
+in-band peak **stays qualified** (the floor is a peak rule). Default sort:
+`GREATEST(observed_peak_market_cap, historical_peak_value)` DESC.
+`?sort=recent_crossing` (Step 20) re-orders by the token's representative
+"$5M crossing" timestamp, newest first, no-crossing tokens last — the default
+stays `peak_market_cap` (see [qualification-events.md](qualification-events.md)).
+No momentum scoring.
 
 Response:
 
@@ -523,6 +560,11 @@ Response:
       "qualification_source": "coingecko",             // dexscreener | coingecko
       "qualification_basis": "market_cap",             // current_market_cap | market_cap
 
+      // Step 20 — the representative "$5M crossing" (verified over observed).
+      "qualification_crossed_at": "2026-08-24T11:00:00+00:00",   // null if not yet recorded
+      "qualification_crossing_type": "HISTORICAL_VERIFIED",       // CURRENT_OBSERVATION | HISTORICAL_VERIFIED | null
+      "recently_crossed": false,                        // crossed_at within recent_crossing_hours (48)
+
       "age_days": 8.07,                         // now − earliest_pair_created_at
       "liquidity_usd": 74479668.03,             // latest snapshot
       "volume_h24": 69398.3,                    // latest snapshot
@@ -535,12 +577,37 @@ Response:
   "meta": {
     "count": 2,
     "retrieved_at": "2026-08-28T07:54:41+00:00",
+    "sort": "peak_market_cap",                // peak_market_cap | recent_crossing
+    "recent_crossing_hours": 48,
     "filters": {
       "max_age_days": 30,
       "observed_peak_market_cap_min_usd": 5000000,
       "observed_peak_market_cap_max_usd": 200000000
     }
   }
+}
+```
+
+### `GET /api/memecoins/recently-crossed` (Step 20)
+
+Read-only, **PostgreSQL only** — never DexScreener / CoinGecko / GeckoTerminal,
+never writes, never creates a crossing event. Returns currently-**qualified**
+tokens (age ≤ 30d, verified/observed peak in `[$5M, $200M]`) whose
+**representative** crossing landed within the window (default 48h, `?hours=`
+1…168, optional `?chain=`), newest crossing first. A token with current MC
+**below `$5M`** still appears — it previously crossed. Rows carry `ACTIVE`
+(current MC ≥ $5M) / `COOLED` (< $5M). See
+[qualification-events.md](qualification-events.md).
+
+```jsonc
+{
+  "data": [
+    { "symbol": "MEME", "chain_id": "solana", "current_market_cap": 4200000,
+      "observed_peak_market_cap": 7200000, "qualification_peak": 7200000,
+      "crossed_at": "…", "crossing_type": "CURRENT_OBSERVATION",
+      "crossing_market_cap_value": 5100000, "status": "COOLED", "age_days": 2.1 }
+  ],
+  "meta": { "hours": 48, "count": 1, "source": "postgresql" }
 }
 ```
 
@@ -566,13 +633,19 @@ observations through Laravel; ingestion is the scheduler's job.
 **Dashboard** (`frontend/`, React + TS + Vite):
 `src/api/memecoins.ts` (fetch, typed, abortable) · `src/types/memecoin.ts` ·
 `src/lib/format.ts` (`$74.6M`, `8d`, timestamps) ·
-`src/components/{MemecoinTable,ChainFilter}.tsx` · `src/App.tsx`.
-States: loading / ready / empty / error ("Unable to load memecoin data.", no
-stack traces). Chain dropdown re-queries the API. Manual **Refresh** button plus
-a gentle 60 s auto-refresh (one `GET /api/memecoins` per tick — no aggressive
-polling). Footer shows `Data source: DexScreener`, last-observed time, and the
-note *"Observed peak reflects the highest market cap captured by this detector,
-not guaranteed lifetime history"* — never labelled "ATH".
+`src/components/{MemecoinTable,ChainFilter,RecentlyCrossedSection}.tsx` ·
+`src/App.tsx`.
+Two sections (Step 20): **🔥 Recently Crossed $5M** (compact card list —
+Token / Chain / Crossed / Current MC / Peak MC / `ACTIVE`|`COOLED`, from
+`GET /api/memecoins/recently-crossed`) above the existing **30-Day Qualified
+Memecoins** table (from `GET /api/memecoins`, with a Sort control:
+Peak market cap / Recent crossing). States: loading / ready / empty / error
+("Unable to load memecoin data.", no stack traces). Chain dropdown re-queries
+the API. Manual **Refresh** button plus a gentle 60 s auto-refresh (one call per
+feed per tick — no aggressive polling). Footer shows `Data source: DexScreener`,
+last-observed time, the note *"Observed peak reflects the highest market cap
+captured by this detector, not guaranteed lifetime history"* (never "ATH"), and
+*"a token below $5M now can still be listed if it previously crossed"*.
 
 ---
 
@@ -615,12 +688,14 @@ propagation, so copying never triggers navigation.
   below $5M current MC, or aged past 30 days, or was never qualified at all, is
   still viewable as long as the `Token` row exists. Qualification gates the
   *list*, not *existence*.
-- **Query strategy (no N+1):** token + its `historicalPeakEvidence` (eager) +
-  one bounded window of recent snapshots + recent pump events (`explanation`,
-  `evidences` eager) — **≤ 6 queries**, the first snapshot row is the latest
-  observation. The full `market_snapshots` history is **never** loaded.
+- **Query strategy (no N+1):** token + its `historicalPeakEvidence` +
+  `qualificationEvents` (eager) + one bounded window of recent snapshots + recent
+  pump events (`explanation`, `evidences` eager) — **≤ 8 queries**, the first
+  snapshot row is the latest observation. The full `market_snapshots` history is
+  **never** loaded.
 
-Response (Step 15 — nested; Step 17-fix adds `historical_estimate`):
+Response (Step 15 — nested; Step 17-fix adds `historical_estimate`;
+Step 20 adds `qualification_timeline`):
 
 ```jsonc
 {
@@ -637,6 +712,17 @@ Response (Step 15 — nested; Step 17-fix adds `historical_estimate`):
       "source": "coingecko",                // dexscreener | coingecko | null
       "basis": "market_cap",                // current_market_cap | market_cap | null
       "confidence": "high"                  // high | medium | low | null
+    },
+
+    "qualification_timeline": {             // Step 20 — WHEN / HOW it crossed $5M
+      "crossed_at": "2026-08-24T11:00:00+00:00",   // representative crossing; null if none recorded
+      "crossing_type": "HISTORICAL_VERIFIED",       // CURRENT_OBSERVATION | HISTORICAL_VERIFIED | null
+      "crossing_source": "coingecko",               // dexscreener | coingecko | null
+      "crossing_market_cap_value": 6100000,
+      "recently_crossed": false,
+      "currently_below_threshold": true,            // latest MC < $5M (still qualified) | null
+      "threshold_usd": 5000000,
+      "events": [ { "type": "…", "crossed_at": "…", "source": "…", "market_cap_value": 0 } ]
     },
 
     "historical_estimate": null,            // or, for a HISTORICAL_ESTIMATE token, an
@@ -719,6 +805,7 @@ qualification `$11.9M`. The read API never writes either value.
 | **Live market chart** (Step 17) | embedded **DexScreener** chart `<iframe>` built from `chain_id` + `latest.primary_pair_address` (see *Live DexScreener Chart* below). Null pair → "Live chart unavailable." — never a broken iframe. |
 | Market overview | stat cards: Current MC, **Observed Peak MC**, **Qualification Peak** (verified/observed MC, or "Not verified"), Age, 24h Volume, Liquidity, and — only when one exists — **Historical FDV estimate** ("Informational — not a market cap"). A note explains the difference between the figures. |
 | **Why is this token on the list?** | status-coloured evidence card. **Qualified** (`CURRENT_OBSERVATION` / `HISTORICAL_VERIFIED`): verified peak MC / source / basis / confidence. **`HISTORICAL_ESTIMATE`** (not qualified): "Not in the main $5M list — FDV estimate only", the FDV figure, and "**FDV = peak price × total supply** … not a verified circulating market cap. It does not verify that market capitalization reached $5M." **`UNKNOWN`**: "could not be verified with available data" — **never** "never reached $5M". |
+| **Qualification timeline** (Step 20) | *Crossed $5M* (timestamp), *Crossing type* ("Current observation" / "Historically verified crossing"), *MC at crossing*, *Current MC*, *Peak MC*, *Within recent window*. If the current MC is below $5M: *"Current MC is below $5M, but the token remains qualified because it previously crossed the threshold."* — never "currently above the threshold". Shows all recorded crossings when both types exist. Placeholder when none recorded (**not** "never reached $5M"). |
 | **Pump events** (Steps 16A–C) | timeline of recent `PumpEvent`s: `started_at → peak_at`, MC %, price %, detection score, detection confidence, status. Each expands (`<details>`) to its persisted AI **"Why did this coin pump?"** explanation — most-supported catalyst, summary, cited evidence (expandable), AI confidence, caveats, unknowns. `pending` → "Explanation pending."; `failed` → "Explanation unavailable." (no provider error shown); `UNKNOWN` → "No verified catalyst was established…". **Never calls AI from the browser.** |
 | Market activity | price, current MC, FDV, liquidity, 24h volume, 24h price change, 24h transactions, buys, sells, DEX, primary pair. Null → **"Unavailable"**. |
 | Observation history | dependency-free market-cap sparkline + a table (Observed At / Price / Market Cap / FDV / Volume / Liquidity / Transactions), newest first, ≤ 50 rows |
@@ -891,6 +978,15 @@ Two tables. No raw provider payloads are stored.
 Every discovery call appends one snapshot per age-eligible token. Repeated calls
 accumulate rows by design (future scheduler will pace this).
 
+### `qualification_events` — "$5M crossing" (Step 20)
+
+One row per token per `type` (`CURRENT_OBSERVATION` / `HISTORICAL_VERIFIED`),
+**unique on `(token_id, type)`**: `crossed_at`, `threshold_usd`,
+`evidence_status`, `source`, `market_cap_value`. Written only by the pipeline
+(`QualificationEventRecorder`), idempotent, `crossed_at` never rewritten.
+`historical_peak_evidences` also gains a nullable `first_verified_crossing_at`.
+See [qualification-events.md](qualification-events.md).
+
 Tests use `RefreshDatabase` against a **dedicated Postgres database**
 `memecoin_test` (project rule: no SQLite), forced in `phpunit.xml`. Create it once:
 
@@ -913,6 +1009,8 @@ docker compose exec postgres createdb -U memecoin memecoin_test
 | `Services\DexScreener\DiscoveryResult` | `{ candidates, diagnostics, notQualifiedSample }`. |
 | `DTOs\DexScreener\TokenCandidateData` | Immutable normalized current observation. |
 | `DTOs\DexScreener\QualifiedCandidate` | `TokenCandidateData` + persisted peak figures → `toArray()` = the API item. |
+| `Services\Historical\QualificationEventRecorder` | Step 20 — upserts `qualification_events` rows for tokens whose evidence proves a verified/observed crossing in `[$5M, $200M]`. One batch pre-load query; idempotent. Pipeline-only. |
+| `Http\Controllers\Api\RecentlyCrossedController` | Step 20 — `GET /api/memecoins/recently-crossed`. Read-only, PostgreSQL only. |
 
 Config: [`config/dexscreener.php`](../backend/config/dexscreener.php). The DexScreener
 base URL is **always** `config('dexscreener.base_url')` ← `DEXSCREENER_BASE_URL`
@@ -1402,7 +1500,31 @@ mocked (`Tests\Concerns\FakesDexScreener`) — no live calls.
   current fields / `chain` filter / sort by observed peak DESC / `limit` works &
   is clamped / invalid params → `422` / DexScreener never called
   (`Http::assertNothingSent`) / empty DB → `{data: [], meta: {count: 0}}` /
-  timestamps are ISO 8601.
+  timestamps are ISO 8601 / **Step 20:** `qualification_crossed_at` /
+  `qualification_crossing_type` / `recently_crossed` exposed (null when no
+  crossing recorded) / default sort stays `peak_market_cap` /
+  `?sort=recent_crossing` orders newest-crossing-first, no-crossing last /
+  `?sort=peak_market_cap` still works / `?sort=bogus` → `422`.
+- **`Feature/QualificationEventTest`** (Step 20) — first CURRENT_OBSERVATION
+  ≥ $5M creates a crossing / previous snapshot < $5M → current ≥ $5M records at
+  the current snapshot / the crossing uses the **earliest** ≥ $5M snapshot /
+  repeated ≥ $5M runs do not duplicate (`(token_id, type)` unique) / the crossing
+  survives a later dump below $5M / `HISTORICAL_VERIFIED` evidence creates a
+  verified crossing at `first_verified_crossing_at` (falls back to
+  `peak_observed_at`) / `HISTORICAL_ESTIMATE` creates **no** verified crossing /
+  `UNKNOWN` / no-evidence create nothing / a verified/observed peak > $200M
+  creates nothing / `HISTORICAL_VERIFIED` + `CURRENT_OBSERVATION` rows coexist and
+  the verified one is representative (original CO row preserved) / identity is
+  chain + address / **the discovery pipeline records the crossing and a second
+  run is idempotent** / the detail endpoint exposes `qualification_timeline`.
+- **`Feature/RecentlyCrossedTest`** (Step 20) — `GET /api/memecoins/recently-crossed`
+  returns tokens crossed within the default 48h window / is read-only and makes
+  **no** provider calls (`Http::assertNothingSent`, ≤ 6 queries) / `?hours=`
+  widens the window / `?hours=` is capped at 168 (`422` above / at 0) / a token
+  **below $5M now** still appears if it recently crossed (`COOLED`) / a token
+  ≥ $5M shows `ACTIVE` / an estimate-only token never appears / an age > 30d
+  token is excluded (record kept) / the **representative** crossing drives window
+  membership / newest crossing first.
 - **`Feature/MemecoinDetailTest`** (Step 15 nested shape) —
   `GET /api/memecoins/{chainId}/{tokenAddress}`: returns the token / identified by
   chain + address (same address, two chains → two tokens) / a symbol is **not** a
@@ -1421,7 +1543,7 @@ mocked (`Tests\Concerns\FakesDexScreener`) — no live calls.
   **and evidence** counts unchanged) / DexScreener / CoinGecko / GeckoTerminal
   never called / a token below $5M **and** older than 30 days still resolves /
   null fields stay `null` / the live chart pair address is returned & never the
-  token address / no per-snapshot N+1 (≤ 7 queries).
+  token address / no per-snapshot N+1 (≤ 8 queries).
 - **`Feature/HistoricalQualificationTest`** (Step 13C, CoinGecko + GeckoTerminal
   fully HTTP-faked) — current MC ≥ $5M → `CURRENT_OBSERVATION` immediately with
   no provider call / current MC < $5M triggers a lookup only when eligible /

@@ -6,6 +6,7 @@ namespace App\Http\Resources;
 
 use App\Models\HistoricalPeakEvidence;
 use App\Models\MarketSnapshot;
+use App\Models\QualificationEvent;
 use App\Models\Token;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\Request;
@@ -38,6 +39,7 @@ class MemecoinResource extends JsonResource
     {
         $snapshot = $this->latestSnapshot;
         $qualification = $this->qualification();
+        $crossing = $this->crossing();
 
         return [
             'id' => $this->id,
@@ -57,6 +59,12 @@ class MemecoinResource extends JsonResource
             'qualification_peak_at' => $qualification['peak_at'],
             'qualification_source' => $qualification['source'],
             'qualification_basis' => $qualification['basis'],
+
+            // Step 20 — the "$5M crossing" (representative event: verified over
+            // observed). null when no crossing has been recorded for this token.
+            'qualification_crossed_at' => $crossing['crossed_at'],
+            'qualification_crossing_type' => $crossing['type'],
+            'recently_crossed' => $crossing['recently_crossed'],
 
             'age_days' => $this->ageDays(),
 
@@ -126,6 +134,33 @@ class MemecoinResource extends JsonResource
         }
 
         return ['status' => null, 'peak_value' => null, 'peak_at' => null, 'source' => null, 'basis' => null];
+    }
+
+    /**
+     * The token's representative "$5M crossing" (Step 20) — the strongest
+     * recorded {@see QualificationEvent} (HISTORICAL_VERIFIED over
+     * CURRENT_OBSERVATION). Reads the eager-loaded `qualificationEvents`
+     * relation; all-null when no crossing has been recorded (the read API never
+     * creates one).
+     *
+     * @return array{crossed_at:?string,type:?string,recently_crossed:bool}
+     */
+    private function crossing(): array
+    {
+        $event = $this->representativeQualificationEvent();
+
+        if ($event === null) {
+            return ['crossed_at' => null, 'type' => null, 'recently_crossed' => false];
+        }
+
+        $hours = (int) config('dexscreener.recent_crossing.hours');
+        $cutoff = CarbonImmutable::now()->subHours($hours);
+
+        return [
+            'crossed_at' => $event->crossed_at?->toIso8601String(),
+            'type' => $event->type,
+            'recently_crossed' => $event->crossed_at !== null && $event->crossed_at->greaterThanOrEqualTo($cutoff),
+        ];
     }
 
     /**

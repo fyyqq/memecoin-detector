@@ -41,13 +41,24 @@ class MemecoinListController extends Controller
      * (`tokens.historical_estimate_fdv_usd` + `historical_peak_evidences`) and
      * shown on the detail page as a clearly-labelled secondary signal.
      *
-     * Sorted by the qualifying market cap (observed or verified), desc.
+     * Default sort is by the qualifying market cap (observed or verified), desc
+     * — a stable leaderboard. `?sort=recent_crossing` re-orders by the token's
+     * representative "$5M crossing" timestamp, newest first (tokens with no
+     * recorded crossing last). The default is deliberately NOT recent_crossing:
+     * the dedicated "Recently Crossed $5M" section / endpoint already serves the
+     * recency view, and flipping the main leaderboard's order would disorient
+     * existing dashboard users.
      */
+    public const SORT_PEAK_MARKET_CAP = 'peak_market_cap';
+
+    public const SORT_RECENT_CROSSING = 'recent_crossing';
+
     public function __invoke(Request $request): AnonymousResourceCollection
     {
         $validated = $request->validate([
             'limit' => ['sometimes', 'integer', 'min:1'],
             'chain' => ['sometimes', 'string', 'max:40', 'regex:/^[A-Za-z0-9_-]+$/'],
+            'sort' => ['sometimes', 'string', 'in:'.self::SORT_PEAK_MARKET_CAP.','.self::SORT_RECENT_CROSSING],
         ]);
 
         $maxAgeDays = (int) config('dexscreener.filters.max_age_days');
@@ -55,11 +66,21 @@ class MemecoinListController extends Controller
         $peakMax = (float) config('dexscreener.filters.observed_peak_market_cap_max_usd');
         $maxLimit = (int) config('dexscreener.limits.max_result_limit');
         $defaultLimit = (int) config('dexscreener.limits.default_result_limit');
+        $recentHours = (int) config('dexscreener.recent_crossing.hours');
 
         $limit = max(1, min((int) ($validated['limit'] ?? $defaultLimit), $maxLimit));
         $chain = isset($validated['chain']) ? mb_strtolower($validated['chain']) : null;
+        $sort = $validated['sort'] ?? self::SORT_PEAK_MARKET_CAP;
 
         $ageCutoff = CarbonImmutable::now()->subDays($maxAgeDays);
+
+        // Representative crossing = strongest recorded crossing (HISTORICAL_VERIFIED
+        // over CURRENT_OBSERVATION). Used for ?sort=recent_crossing.
+        $representativeCrossedAt = 'coalesce('
+            .'(select qe.crossed_at from qualification_events qe where qe.token_id = tokens.id '
+            ."and qe.type = 'HISTORICAL_VERIFIED' limit 1), "
+            .'(select qe.crossed_at from qualification_events qe where qe.token_id = tokens.id '
+            ."and qe.type = 'CURRENT_OBSERVATION' limit 1))";
 
         $tokens = Token::query()
             ->whereNotNull('earliest_pair_created_at')
@@ -82,8 +103,13 @@ class MemecoinListController extends Controller
                 [$peakMax],
             )
             ->when($chain, fn ($query) => $query->where('chain_id', $chain))
-            ->with(['latestSnapshot', 'historicalPeakEvidence'])
-            ->orderByRaw('GREATEST(COALESCE(observed_peak_market_cap, 0), COALESCE(historical_peak_value, 0)) DESC')
+            ->with(['latestSnapshot', 'historicalPeakEvidence', 'qualificationEvents'])
+            ->when(
+                $sort === self::SORT_RECENT_CROSSING,
+                fn ($query) => $query->orderByRaw("({$representativeCrossedAt}) DESC NULLS LAST"),
+                fn ($query) => $query->orderByRaw('GREATEST(COALESCE(observed_peak_market_cap, 0), COALESCE(historical_peak_value, 0)) DESC'),
+            )
+            ->orderBy('id')
             ->limit($limit)
             ->get();
 
@@ -91,6 +117,8 @@ class MemecoinListController extends Controller
             'meta' => [
                 'count' => $tokens->count(),
                 'retrieved_at' => CarbonImmutable::now()->toIso8601String(),
+                'sort' => $sort,
+                'recent_crossing_hours' => $recentHours,
                 'filters' => [
                     'max_age_days' => $maxAgeDays,
                     'observed_peak_market_cap_min_usd' => (int) $peakMin,
