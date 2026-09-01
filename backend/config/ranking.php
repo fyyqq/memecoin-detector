@@ -4,47 +4,86 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Monthly Meme Champions (Step 22)
+    | Monthly Top Memecoins (Step 25 — Top 3, participation score)
     |--------------------------------------------------------------------------
     |
-    | The champion of a calendar month is the single eligible trending memecoin
-    | that most strongly OUTPERFORMED the other eligible trending memecoins that
-    | month. The score PRIMARILY rewards relative market-cap GROWTH
-    | (baseline -> peak within the month), from OBSERVED / VERIFIED market cap
-    | only — never FDV, never a historical estimate.
+    | For EVERY calendar month, the TOP 3 performing memecoins inside each of the
+    | five fixed chain buckets (solana / robinhood / bsc / base / other), unique
+    | on (year, month, chain_bucket, rank). The score rewards real PARTICIPATION:
     |
-    | The score is a transparent 0..100 figure and is NOT a prediction of future
-    | returns. The UI says "observed MC growth", never "profit" / "ROID" / "return".
+    |   strength(x, ref)     = min(1, ln(1 + x) / ln(1 + ref))     (capped-log)
+    |   holder_strength      = strength(holder_count,       references.holder_count)
+    |   volume_strength      = strength(monthly_volume_usd, references.volume_usd)
+    |   market_cap_strength  = strength(month_peak_mc,      references.market_cap_usd)
+    |
+    |   score = 100 * Σ(weight · strength) / Σ(weight)   over the KNOWN components
+    |
+    | A `null` holder count is UNKNOWN — it drops out of the sum and the remaining
+    | weights renormalize (never silently treated as 0). Market cap is SUPPORTING
+    | evidence: a $150M token does NOT automatically beat a $20M token with far
+    | stronger holders + volume. All figures come from OBSERVED / VERIFIED data —
+    | never FDV, never a historical estimate, never a current count standing in
+    | for a past month. Risk score, AI and social sentiment are NEVER used. The
+    | score is NOT a prediction of returns.
+    |
+    | `market_cap_growth_pct` / `peak_expansion_ratio` / `activity` are still
+    | computed and shown, but are INFO-ONLY context — never part of the score or
+    | the ordering.
     |
     */
 
-    // Score = 100 * (w_growth*growth_score + w_expansion*expansion_score
-    //                + w_activity*activity_score). Weights are configurable;
-    // growth must stay dominant.
+    // How many ranked rows per (year, month, chain_bucket). 12 · 5 · 3 = 180/yr.
+    'top_n' => max(1, (int) env('MEMECOIN_MONTHLY_TOP_N', 3)),
+
+    // Selection weights (sum need not be 1 — the score renormalizes over the
+    // components that are actually known).
     'weights' => [
-        'growth' => (float) env('MEMECOIN_MONTHLY_WEIGHT_GROWTH', 0.60),
-        'expansion' => (float) env('MEMECOIN_MONTHLY_WEIGHT_EXPANSION', 0.25),
-        'activity' => (float) env('MEMECOIN_MONTHLY_WEIGHT_ACTIVITY', 0.15),
+        'holder' => (float) env('MEMECOIN_MONTHLY_W_HOLDER', 0.40),
+        'volume' => (float) env('MEMECOIN_MONTHLY_W_VOLUME', 0.35),
+        'market_cap' => (float) env('MEMECOIN_MONTHLY_W_MARKET_CAP', 0.25),
+    ],
+
+    // The raw value at which each strength reaches ~1.0.
+    //   holder_count 10_000   => a 10k-holder token scores ~1.0 on holders
+    //   volume_usd 20M        => a $20M representative monthly volume scores ~1.0
+    //   market_cap_usd 50M    => a $50M month-peak MC scores ~1.0 (a $150M token
+    //                            is only modestly higher — MC cannot dominate)
+    'references' => [
+        'holder_count' => (float) env('MEMECOIN_MONTHLY_REF_HOLDERS', 10_000),
+        'volume_usd' => (float) env('MEMECOIN_MONTHLY_REF_VOLUME_USD', 20_000_000),
+        'market_cap_usd' => (float) env('MEMECOIN_MONTHLY_REF_MARKET_CAP_USD', 50_000_000),
+    ],
+
+    // "Never rank by market-cap size alone." A RESEARCHED candidate whose only
+    // known participation input is a market cap (no holder count, no volume) has
+    // its score multiplied by this — it can still be recorded but can never beat
+    // a candidate with real holder + volume evidence. Internal-observed
+    // candidates always have volume (an eligibility gate) so this never applies
+    // to them.
+    'market_cap_only_penalty' => (float) env('MEMECOIN_MONTHLY_MARKET_CAP_ONLY_PENALTY', 0.5),
+
+    /*
+    | Monthly holder pass. The current PROVISIONAL month polls GeckoTerminal
+    | `/info` (reusing App\Services\Risk\GeckoTerminalInfoClient) for the eligible
+    | candidates only, once a day inside `memecoins:finalize-monthly-champion`.
+    | It stores the monthly MAX holder count on the ranking rows. There is NO
+    | `market_snapshots` change and NO holder capture in the 10-minute discovery
+    | loop. A completed past month gets holder data ONLY from an operator seed row.
+    */
+    'holder_pass' => [
+        'enabled' => filter_var(env('MEMECOIN_MONTHLY_HOLDER_PASS_ENABLED', true), FILTER_VALIDATE_BOOL),
+        'max_tokens_per_run' => max(0, (int) env('MEMECOIN_MONTHLY_HOLDER_MAX_TOKENS', 25)),
+        'cooldown_hours' => max(0, (int) env('MEMECOIN_MONTHLY_HOLDER_COOLDOWN_HOURS', 20)),
     ],
 
     /*
-    | Deterministic capped-log normalization so extreme outliers cannot dominate
-    | indefinitely:
-    |
-    |   growth_score    = min(1, ln(1 + growth_pct/100) / ln(1 + growth_reference))
-    |   expansion_score = min(1, ln(peak_expansion_ratio) / ln(expansion_reference))
-    |
-    | growth_reference 20  => 2000% growth (a ~21x baseline->peak) scores 1.0
-    | expansion_reference 25 => a 25x peak/baseline ratio scores 1.0
+    | INFO-ONLY context (`market_cap_growth_pct` / `peak_expansion_ratio` /
+    | activity). Deterministic capped-log normalization; shown in the API but
+    | never part of the selection score or the ordering.
     */
     'growth_reference' => (float) env('MEMECOIN_MONTHLY_GROWTH_REFERENCE', 20.0),
     'expansion_reference' => (float) env('MEMECOIN_MONTHLY_EXPANSION_REFERENCE', 25.0),
 
-    /*
-    | Activity is SUPPORTING EVIDENCE ONLY (15% of the score). Each input is
-    | normalized min(1, ln(1 + median_value) / ln(1 + reference)) over the
-    | month's eligible snapshots, then combined by the sub-weights.
-    */
     'activity' => [
         'weights' => [
             'volume' => (float) env('MEMECOIN_MONTHLY_ACTIVITY_WEIGHT_VOLUME', 0.45),

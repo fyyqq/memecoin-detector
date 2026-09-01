@@ -3,10 +3,11 @@ import { useNavigate } from 'react-router-dom'
 import type {
   ChainBucket,
   MonthlyChampionBucket,
+  MonthlyChampionEntry,
   MonthlyChampionMonth,
 } from '../types/memecoin'
 import { CHAIN_BUCKET_LABEL, CHAIN_BUCKETS } from '../types/memecoin'
-import { formatPercentCompact, formatUsd } from '../lib/format'
+import { formatInteger, formatUsd } from '../lib/format'
 
 interface MonthlyChampionsProps {
   months: MonthlyChampionMonth[]
@@ -18,41 +19,46 @@ interface MonthlyChampionsProps {
 
 type BucketFilter = 'all' | ChainBucket
 
+const MEDALS = ['🥇', '🥈', '🥉']
+
 /**
- * "Monthly Chain Champions" — a 3×4 year calendar. Each month card shows the
- * top-1 memecoin in EACH of the five chain buckets (Solana / Robinhood / BSC /
- * Base / Other), by observed market-cap growth within the eligible universe.
- * Not a "best investment" — a monthly observed-performance record per chain.
+ * "Monthly Top Memecoins" — a 3×4 year calendar. Each month card shows the TOP 3
+ * memecoins in EACH of the five chain buckets (Solana / Robinhood / BSC / Base /
+ * Other), ranked by real participation: holder count (0.40) + representative
+ * monthly volume (0.35) + month-peak observed/verified market cap (0.25). Market
+ * cap is supporting evidence — it cannot dominate. Not a "best investment" — a
+ * monthly participation record per chain.
  *
- * A chain filter narrows every month card to a single bucket.
+ * A chain filter narrows every month card to a single bucket's Top 3.
  */
 export function MonthlyChampions({ months, year, loading, error, onRetry }: MonthlyChampionsProps) {
   const navigate = useNavigate()
   const [filter, setFilter] = useState<BucketFilter>('all')
 
-  const open = (bucket: MonthlyChampionBucket) => {
+  const open = (entry: MonthlyChampionEntry) => {
     // Only tokens we actually track (token.id) have a detail page. A
-    // historically-backfilled champion we do not track is display-only.
-    if (!bucket.token || bucket.token.id == null) return
+    // historically-backfilled entry we do not track is display-only.
+    const token = entry.token
+    if (!token || token.id == null) return
     navigate(
-      `/memecoin/${encodeURIComponent(bucket.token.chain_id)}/${encodeURIComponent(
-        bucket.token.token_address,
-      )}`,
+      `/memecoin/${encodeURIComponent(token.chain_id)}/${encodeURIComponent(token.token_address)}`,
     )
   }
 
   return (
     <section className="monthly-champions">
       <div className="section-heading">
-        <h2>🏆 Monthly Chain Champions</h2>
+        <h2>🏆 Monthly Top Memecoins</h2>
         <span className="muted">{year}</span>
       </div>
       <p className="muted detail-note">
-        Top-1 performing memecoin per chain bucket per month, by observed market-cap growth within
-        the eligible universe. Completed months before our detector launched are backfilled from
-        researched historical market sources; where evidence is incomplete a bucket shows
-        &ldquo;Best-supported&rdquo; or &ldquo;No verified champion&rdquo; — never a fabricated
-        winner or a claimed exact DexScreener rank. Not a prediction of returns, not an investment
+        Top 3 memecoins per chain bucket per month, ranked by real participation — holder count
+        (40%), representative monthly volume (35%) and month-peak observed/verified market cap
+        (25%), log-normalized. Market cap is supporting evidence and cannot dominate. Completed
+        months before our detector launched are backfilled from researched historical sources;
+        where evidence is incomplete an entry shows lower confidence, and a bucket with no
+        defensible candidate shows &ldquo;No verified result&rdquo; — never a fabricated position or
+        a claimed exact DexScreener rank. Not a prediction of returns, not an investment
         recommendation.
       </p>
 
@@ -98,12 +104,10 @@ export function MonthlyChampions({ months, year, loading, error, onRetry }: Mont
   )
 }
 
-const BUCKET_STATUS_LABEL: Record<string, string> = {
+const MONTH_STATUS_LABEL: Record<string, string> = {
   provisional: 'Provisional',
   finalized: 'Finalized',
-  best_supported_candidate: 'Best-supported',
-  no_verified_champion: 'No verified champion',
-  future: 'No champion yet',
+  future: 'Upcoming',
 }
 
 const SOURCE_TYPE_LABEL: Record<string, string> = {
@@ -115,10 +119,15 @@ const SOURCE_TYPE_LABEL: Record<string, string> = {
   other_verified_source: 'Verified source',
 }
 
-const MONTH_STATUS_LABEL: Record<string, string> = {
-  provisional: 'Provisional',
-  finalized: 'Finalized',
-  future: 'Upcoming',
+function emptyLabel(bucket: MonthlyChampionBucket): string {
+  switch (bucket.status) {
+    case 'future':
+      return 'No results yet'
+    case 'no_verified_result':
+      return 'No verified result'
+    default:
+      return 'Awaiting data'
+  }
 }
 
 function MonthCard({
@@ -128,12 +137,10 @@ function MonthCard({
 }: {
   month: MonthlyChampionMonth
   filter: BucketFilter
-  onOpen: (bucket: MonthlyChampionBucket) => void
+  onOpen: (entry: MonthlyChampionEntry) => void
 }) {
   const buckets =
-    filter === 'all'
-      ? CHAIN_BUCKETS.map((b) => month.champions[b])
-      : [month.champions[filter]]
+    filter === 'all' ? CHAIN_BUCKETS.map((b) => month.champions[b]) : [month.champions[filter]]
 
   return (
     <article className={`champion-card champion-card-${month.status}`}>
@@ -146,80 +153,90 @@ function MonthCard({
 
       <ul className={`champion-buckets${filter !== 'all' ? ' champion-buckets-single' : ''}`}>
         {buckets.map((bucket) => (
-          <BucketRow key={bucket.chain_bucket} bucket={bucket} single={filter !== 'all'} onOpen={onOpen} />
+          <li key={bucket.chain_bucket} className="champion-bucket-block">
+            <span className="champion-bucket-name">{CHAIN_BUCKET_LABEL[bucket.chain_bucket]}</span>
+            {bucket.entries.length === 0 ? (
+              <span className="champion-bucket-empty muted">{emptyLabel(bucket)}</span>
+            ) : (
+              <ol className="champion-entries">
+                {bucket.entries.map((entry) => (
+                  <EntryRow
+                    key={entry.rank}
+                    entry={entry}
+                    single={filter !== 'all'}
+                    onOpen={onOpen}
+                  />
+                ))}
+              </ol>
+            )}
+          </li>
         ))}
       </ul>
     </article>
   )
 }
 
-function BucketRow({
-  bucket,
+function EntryRow({
+  entry,
   single,
   onOpen,
 }: {
-  bucket: MonthlyChampionBucket
+  entry: MonthlyChampionEntry
   single: boolean
-  onOpen: (bucket: MonthlyChampionBucket) => void
+  onOpen: (entry: MonthlyChampionEntry) => void
 }) {
-  const { token, performance } = bucket
-  const hasChampion = token !== null
-  const isLink = token !== null && token.id != null
-  const growth = performance?.market_cap_growth_pct
-  const label = CHAIN_BUCKET_LABEL[bucket.chain_bucket]
+  const { token, performance } = entry
+  const isLink = token != null && token.id != null
+  const medal = MEDALS[entry.rank - 1] ?? `#${entry.rank}`
 
   return (
     <li
-      className={`champion-bucket-row${isLink ? ' champion-bucket-link' : ''}`}
+      className={`champion-entry${isLink ? ' champion-entry-link' : ''}`}
       {...(isLink
         ? {
             role: 'link' as const,
             tabIndex: 0,
-            'aria-label': `View ${token.symbol ?? 'champion'} — ${label}`,
-            onClick: () => onOpen(bucket),
+            'aria-label': `View ${token.symbol ?? 'entry'} — rank ${entry.rank}`,
+            onClick: () => onOpen(entry),
             onKeyDown: (event: React.KeyboardEvent) => {
               if (event.key === 'Enter' || event.key === ' ') {
                 event.preventDefault()
-                onOpen(bucket)
+                onOpen(entry)
               }
             },
           }
         : {})}
     >
-      <span className="champion-bucket-name">{label}</span>
-
-      {hasChampion ? (
-        <span className="champion-bucket-body">
-          <span className="champion-bucket-token">
-            <span aria-hidden="true">🥇</span> ${token.symbol ?? '—'}
-            {bucket.status === 'best_supported_candidate' && (
-              <span className="champion-tag" title="A real token led this bucket but historical evidence is incomplete">
-                best-supported
-              </span>
-            )}
-            {bucket.age_uncertain && (
-              <span className="champion-tag champion-tag-warn" title="Launch / pool age could not be established from evidence">
-                age uncertain
-              </span>
-            )}
+      <span className="champion-entry-head">
+        <span aria-hidden="true">{medal}</span> ${token?.symbol ?? '—'}
+        {entry.age_uncertain && (
+          <span
+            className="champion-tag champion-tag-warn"
+            title="Launch / pool age could not be established from evidence"
+          >
+            age uncertain
           </span>
-          <span className="champion-bucket-growth">
-            {growth != null ? `${formatPercentCompact(growth)} MC growth` : 'MC growth —'}
-          </span>
-          {single && (
-            <span className="champion-bucket-meta muted">
-              Peak {performance?.peak_market_cap != null ? formatUsd(performance.peak_market_cap) : '—'}
-              {' · '}
-              {token.chain_id}
-              {bucket.confidence ? ` · ${bucket.confidence} confidence` : ''}
-              {bucket.source_type
-                ? ` · ${SOURCE_TYPE_LABEL[bucket.source_type] ?? bucket.source_type}`
-                : ''}
-            </span>
-          )}
+        )}
+      </span>
+      <span className="champion-entry-stats muted">
+        {performance.score != null ? performance.score.toFixed(1) : '—'}
+        {' · '}
+        {performance.market_cap != null ? formatUsd(performance.market_cap) : '—'} MC
+        {' · '}
+        {performance.holder_count != null
+          ? `${formatInteger(performance.holder_count)} holders`
+          : 'holders unknown'}
+      </span>
+      {single && (
+        <span className="champion-entry-meta muted">
+          {performance.monthly_volume != null ? `${formatUsd(performance.monthly_volume)} vol` : 'vol —'}
+          {' · '}
+          {token?.chain_id}
+          {entry.confidence ? ` · ${entry.confidence} confidence` : ''}
+          {entry.source_type
+            ? ` · ${SOURCE_TYPE_LABEL[entry.source_type] ?? entry.source_type}`
+            : ''}
         </span>
-      ) : (
-        <span className="champion-bucket-empty muted">{BUCKET_STATUS_LABEL[bucket.status] ?? bucket.status}</span>
       )}
     </li>
   )

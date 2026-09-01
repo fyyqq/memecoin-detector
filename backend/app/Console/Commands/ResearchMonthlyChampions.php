@@ -108,13 +108,16 @@ class ResearchMonthlyChampions extends Command
         $symbol = $row->champion_symbol ?? $row->token?->symbol ?? '#'.$row->token_id;
 
         return sprintf(
-            '%s — %s (%s / %s / +%s%% growth / %s)',
+            '%s — #%d %s (%s / %s / score %s / holders %s / vol %s / mc %s)',
             $row->status,
+            (int) $row->rank,
             $symbol,
             $row->source_type ?? '—',
             $row->confidence ?? '—',
-            $row->market_cap_growth_pct !== null ? round((float) $row->market_cap_growth_pct) : '?',
-            $row->peak_market_cap !== null ? '$'.number_format((float) $row->peak_market_cap / 1_000_000, 1).'M peak' : 'peak MC ?',
+            $row->performance_score !== null ? round((float) $row->performance_score, 1) : '?',
+            $row->holder_count !== null ? number_format((int) $row->holder_count) : 'UNKNOWN',
+            $row->monthly_volume_usd !== null ? '$'.number_format((float) $row->monthly_volume_usd / 1_000_000, 1).'M' : 'UNKNOWN',
+            $row->month_market_cap !== null ? '$'.number_format((float) $row->month_market_cap / 1_000_000, 1).'M' : 'UNKNOWN',
         );
     }
 
@@ -123,11 +126,11 @@ class ResearchMonthlyChampions extends Command
         $this->newLine();
         $this->info('Historical research completed.');
         $this->line('Providers used:            '.(implode(', ', $result->providersUsed) ?: 'none'));
-        $this->line('Finalized:                 '.$result->finalized);
-        $this->line('Best-supported candidate:  '.$result->bestSupportedCandidate);
-        $this->line('No verified champion:      '.$result->noVerifiedChampion);
+        $this->line('Buckets finalized:         '.$result->finalized);
+        $this->line('No verified result:       '.$result->noVerifiedChampion);
         $this->line('Future (untouched):        '.$result->future);
         $this->line('Skipped (finalized):       '.$result->skipped);
+        $this->line('Ranked rows written:       '.count($result->buckets));
         $this->line('Provider failures:         '.$result->providerFailures);
     }
 }

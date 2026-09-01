@@ -9,15 +9,25 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 /**
- * One bucket's "Monthly Top Memecoin" for a calendar month (Step 22, corrected)
- * — at most ONE row per `(year, month, chain_bucket)`, buckets being
- * `solana | robinhood | bsc | base | other`.
+ * One ranked "Monthly Top Memecoin" for a calendar month + chain bucket
+ * (Step 25, Top 3) — up to THREE rows per `(year, month, chain_bucket)`, unique
+ * on `(year, month, chain_bucket, rank)` with `rank` in `{1, 2, 3}`. Buckets are
+ * `solana | robinhood | bsc | base | other`; at most `12 × 5 × 3 = 180` rows a
+ * year.
  *
- * The champion is the single memecoin with the strongest SUPPORTED performance
- * in the eligible universe for that month + bucket, scored primarily on observed
- * market-cap growth (baseline -> peak within the month). NOT the biggest token,
- * highest market cap, most liquidity, or first to cross $5M. Risk score and AI
- * are NEVER used to select the winner. The score is not a prediction of returns.
+ * The Top 3 are the memecoins with the strongest real PARTICIPATION in the
+ * eligible universe for that month + bucket:
+ *
+ *   score = 100 · Σ(weight · strength) / Σ(weight)   over the KNOWN components
+ *   holder_strength     (weight 0.40)  from a monthly-max holder count
+ *   volume_strength     (weight 0.35)  from the month's representative volume
+ *   market_cap_strength (weight 0.25)  from the month's peak observed/verified MC
+ *
+ * Market cap is SUPPORTING — a $150M token does not automatically beat a $20M
+ * token with far stronger holders + volume. `market_cap_growth_pct` /
+ * `peak_expansion_ratio` / `activity_score` are INFO-ONLY context, never part of
+ * the score or the ordering. Risk score, AI and social sentiment are NEVER used.
+ * The score is not a prediction of returns.
  */
 class MonthlyRanking extends Model
 {
@@ -25,17 +35,15 @@ class MonthlyRanking extends Model
 
     public const STATUS_FINALIZED = 'finalized';
 
-    public const STATUS_BEST_SUPPORTED_CANDIDATE = 'best_supported_candidate';
-
-    public const STATUS_NO_VERIFIED_CHAMPION = 'no_verified_champion';
+    /** A completed past month/bucket with no defensible ranked candidate. */
+    public const STATUS_NO_VERIFIED_RESULT = 'no_verified_result';
 
     public const STATUS_FUTURE = 'future';
 
-    /** Statuses that carry a real champion token. */
+    /** Statuses that carry a real ranked token. */
     public const STATUSES_WITH_TOKEN = [
         self::STATUS_PROVISIONAL,
         self::STATUS_FINALIZED,
-        self::STATUS_BEST_SUPPORTED_CANDIDATE,
     ];
 
     /** Our own MarketSnapshots established the winner. */
@@ -71,6 +79,7 @@ class MonthlyRanking extends Model
         'year',
         'month',
         'chain_bucket',
+        'rank',
         'token_id',
         // Denormalized identity for a historically-researched champion that is
         // NOT in our `tokens` table.
@@ -81,6 +90,15 @@ class MonthlyRanking extends Model
         'champion_image_url',
         'status',
         'performance_score',
+        // Participation inputs to the new score.
+        'holder_count',
+        'monthly_volume_usd',
+        'month_market_cap',
+        'holder_strength',
+        'volume_strength',
+        'market_cap_strength',
+        'holder_checked_at',
+        // Info-only context (never part of the score / ordering).
         'baseline_market_cap',
         'peak_market_cap',
         'market_cap_growth_pct',
@@ -103,7 +121,15 @@ class MonthlyRanking extends Model
         return [
             'year' => 'integer',
             'month' => 'integer',
+            'rank' => 'integer',
             'performance_score' => 'float',
+            'holder_count' => 'integer',
+            'monthly_volume_usd' => 'float',
+            'month_market_cap' => 'float',
+            'holder_strength' => 'float',
+            'volume_strength' => 'float',
+            'market_cap_strength' => 'float',
+            'holder_checked_at' => 'immutable_datetime',
             'baseline_market_cap' => 'float',
             'peak_market_cap' => 'float',
             'market_cap_growth_pct' => 'float',
@@ -126,16 +152,15 @@ class MonthlyRanking extends Model
     }
 
     /**
-     * A row is immutable during normal scheduler operation once it has been
-     * finalized OR recorded as a best-supported candidate (both are "the past
-     * month has been decided"). Only `--force` recomputes it.
+     * A settled past month/bucket is immutable during normal scheduler operation
+     * — `finalized` or `no_verified_result` with `finalized_at` set. Only
+     * `--force` recomputes it.
      */
     public function isSettled(): bool
     {
         return in_array($this->status, [
             self::STATUS_FINALIZED,
-            self::STATUS_BEST_SUPPORTED_CANDIDATE,
-            self::STATUS_NO_VERIFIED_CHAMPION,
+            self::STATUS_NO_VERIFIED_RESULT,
         ], true) && $this->finalized_at !== null;
     }
 

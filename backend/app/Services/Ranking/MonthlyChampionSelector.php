@@ -5,85 +5,103 @@ declare(strict_types=1);
 namespace App\Services\Ranking;
 
 /**
- * Picks the single champion from a bucket's candidates — deterministically.
+ * Picks the ranked Top 3 from a bucket's candidates — deterministically
+ * (Step 25).
  *
- * `select()` returns the best `eligible` candidate. `selectAmong()` returns the
- * best candidate of ANY given status (used to record a `best_supported_candidate`
- * when only thinly-observed real tokens are available).
+ * `selectTop3()` returns up to `config('ranking.top_n')` (3) candidates, ordered
+ * by `performanceScore` desc. `eligible` candidates fill the ranks first; only
+ * if fewer than N are eligible do `insufficient_observation` candidates fill the
+ * remaining slots (a real token led the bucket but was observed thinly — the
+ * row is still stored, at lower confidence). A token appears at most once.
  *
- * The winner is the highest `performance_score`; ties break on, in order:
- * higher observed market-cap growth, higher peak market cap, higher observation
- * coverage, higher observation count, lower token id. Every tie-break is
- * deterministic — there is no randomness. Risk score and AI are NEVER used.
+ * Tie-break (per the spec), in order: higher holder strength → higher volume
+ * strength → higher market-cap strength → higher observation coverage → token
+ * key ascending. Every tie-break is deterministic — no randomness. Risk score
+ * and AI are NEVER used.
  */
 class MonthlyChampionSelector
 {
     /**
      * @param  list<MonthlyCandidate>  $candidates
+     * @return list<MonthlyCandidate> 0..N, best first
      */
-    public function select(array $candidates): ?MonthlyCandidate
+    public function selectTop3(array $candidates): array
     {
-        return $this->selectAmong($candidates, MonthlyCandidate::STATUS_ELIGIBLE);
+        $n = max(1, (int) config('ranking.top_n', 3));
+
+        $eligible = $this->ordered(array_filter($candidates, fn (MonthlyCandidate $c): bool => $c->status === MonthlyCandidate::STATUS_ELIGIBLE && $c->performanceScore !== null));
+        $thin = $this->ordered(array_filter($candidates, fn (MonthlyCandidate $c): bool => $c->status === MonthlyCandidate::STATUS_INSUFFICIENT_OBSERVATION && $c->performanceScore !== null));
+
+        $picked = [];
+        $seen = [];
+        foreach ([...$eligible, ...$thin] as $candidate) {
+            $key = $candidate->tokenKey();
+            if (isset($seen[$key])) {
+                continue;
+            }
+            $seen[$key] = true;
+            $picked[] = $candidate;
+            if (count($picked) >= $n) {
+                break;
+            }
+        }
+
+        return $picked;
     }
 
     /**
+     * The strongest single candidate (rank 1), or null. Convenience wrapper.
+     *
      * @param  list<MonthlyCandidate>  $candidates
-     * @param  MonthlyCandidate::STATUS_*  $status
      */
-    public function selectAmong(array $candidates, string $status): ?MonthlyCandidate
+    public function select(array $candidates): ?MonthlyCandidate
     {
-        $matching = array_values(array_filter(
-            $candidates,
-            fn (MonthlyCandidate $c): bool => $c->status === $status && $c->performanceScore !== null,
-        ));
+        return $this->selectTop3($candidates)[0] ?? null;
+    }
 
-        if ($matching === []) {
-            return null;
-        }
+    /**
+     * @param  iterable<MonthlyCandidate>  $candidates
+     * @return list<MonthlyCandidate>
+     */
+    private function ordered(iterable $candidates): array
+    {
+        $list = is_array($candidates) ? array_values($candidates) : iterator_to_array($candidates, false);
+        usort($list, fn (MonthlyCandidate $a, MonthlyCandidate $b): int => $this->compare($a, $b));
 
-        usort($matching, fn (MonthlyCandidate $a, MonthlyCandidate $b): int => $this->compare($a, $b));
-
-        return $matching[0];
+        return $list;
     }
 
     private function compare(MonthlyCandidate $a, MonthlyCandidate $b): int
     {
+        $byScore = $b->performanceScore <=> $a->performanceScore;
+        if ($byScore !== 0) {
+            return $byScore;
+        }
+
         return [
-            $b->performanceScore,
-            $b->marketCapGrowthPct ?? 0.0,
-            $b->peakMarketCap ?? 0.0,
-            $b->observationCoverageRatio ?? 0.0,
-            $b->observationCount,
-            -(int) $b->token->id,
+            $b->holderStrength ?? -1.0,
+            $b->volumeStrength ?? -1.0,
+            $b->marketCapStrength ?? -1.0,
+            $b->observationCoverageRatio ?? -1.0,
         ] <=> [
-            $a->performanceScore,
-            $a->marketCapGrowthPct ?? 0.0,
-            $a->peakMarketCap ?? 0.0,
-            $a->observationCoverageRatio ?? 0.0,
-            $a->observationCount,
-            -(int) $a->token->id,
-        ];
+            $a->holderStrength ?? -1.0,
+            $a->volumeStrength ?? -1.0,
+            $a->marketCapStrength ?? -1.0,
+            $a->observationCoverageRatio ?? -1.0,
+        ] ?: strcmp($a->tokenKey(), $b->tokenKey());
     }
 
     /**
-     * The runner-up score among ELIGIBLE candidates, for the champion row's
-     * audit trail. Null when there was fewer than two.
+     * The score of the first candidate NOT in the Top 3, for the audit trail.
+     * Null when there were <= N eligible candidates.
      *
      * @param  list<MonthlyCandidate>  $candidates
      */
     public function runnerUpScore(array $candidates): ?float
     {
-        $scores = array_values(array_filter(array_map(
-            fn (MonthlyCandidate $c): ?float => $c->isEligible() ? $c->performanceScore : null,
-            $candidates,
-        )));
+        $n = max(1, (int) config('ranking.top_n', 3));
+        $eligible = $this->ordered(array_filter($candidates, fn (MonthlyCandidate $c): bool => $c->isEligible() && $c->performanceScore !== null));
 
-        if (count($scores) < 2) {
-            return null;
-        }
-
-        rsort($scores);
-
-        return $scores[1];
+        return isset($eligible[$n]) ? $eligible[$n]->performanceScore : null;
     }
 }

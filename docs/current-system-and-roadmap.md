@@ -34,6 +34,34 @@
 > has **9** routes. The **§14 recommended next step (Risk Phase 3 — Identity &
 > Market-Integrity)** stands, minus its "route to RISK WATCH" wording — a
 > flagged token is now excluded from the Main List rather than rerouted.
+>
+> **Update 2026-09-01 (3rd — Step 25, Monthly Top 3):** "Monthly Chain
+> Champions" became **"Monthly Top Memecoins"** — the top **3** performers per
+> `(year, month, chain_bucket)` instead of one. `monthly_rankings` is now
+> **unique on `(year, month, chain_bucket, rank)`** (`rank ∈ {1,2,3}`, ≤ 180
+> rows/year) with new columns `rank` / `holder_count` / `monthly_volume_usd` /
+> `month_market_cap` / `holder_strength` / `volume_strength` /
+> `market_cap_strength` / `holder_checked_at`. Selection is no longer
+> market-cap-growth-weighted — it is a **participation** score
+> `100·Σ(w·strength)/Σ(w)` over the KNOWN components, weights
+> `holder 0.40 / volume 0.35 / market_cap 0.25` (`config/ranking.php`,
+> env-configurable), `strength(x, ref) = min(1, ln(1+x)/ln(1+ref))`; a `null`
+> holder count is UNKNOWN and drops out (never zeroed, never a current count for
+> a past month); a researched MC-only candidate is halved
+> (`market_cap_only_penalty`). `growth` / `expansion` / `activity` are retained
+> as **info-only** context. The daily `memecoins:finalize-monthly-champion` now
+> also runs a lightweight **monthly holder pass** (`MonthlyHolderCollector` →
+> GeckoTerminal `/info`, current provisional month only, ≤ 25/run, 20h per-token
+> cooldown, monthly-max, **no `market_snapshots` change**). Statuses collapsed
+> to `provisional | finalized | future | no_verified_result` (the old
+> `best_supported_candidate` / `no_verified_champion` are gone — "best-supported"
+> is now `confidence: low` on a `finalized` row). The API returns each bucket as
+> `{status, entries[0..3]}` with `meta.top_n` + `meta.weights`. Live backfill
+> result unchanged in spirit: **CASHCAT → July / Robinhood rank 1**
+> (`best_supported_historical_performer`, `confidence: medium`, MC-only →
+> score 50); every other completed past bucket is honestly `no_verified_result`.
+> Sections **7, 13-H**, the schema tables and issue **#4** below describe the
+> pre-Step-25 one-winner model.
 
 ---
 

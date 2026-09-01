@@ -1197,6 +1197,8 @@
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
+  max-height: 22rem;
+  overflow-y: auto;
 }
 
 .champion-card-future {
@@ -1210,6 +1212,60 @@
   padding: 0;
   display: flex;
   flex-direction: column;
+}
+
+/* --- Top 3 (Step 25) --- */
+.champion-bucket-block {
+  padding: 0.3rem 0;
+  border-top: 1px solid #eef0f3;
+}
+
+.champion-bucket-block:first-child {
+  border-top: none;
+}
+
+.champion-entries {
+  list-style: none;
+  margin: 0.1rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.08rem;
+}
+
+.champion-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 0.02rem;
+  padding: 0.14rem 0.3rem;
+  border-radius: 4px;
+  font-size: 0.74rem;
+}
+
+.champion-entry-link {
+  cursor: pointer;
+}
+
+.champion-entry-link:hover,
+.champion-entry-link:focus-visible {
+  outline: none;
+  background: #eef2ff;
+}
+
+.champion-entry-head {
+  font-weight: 600;
+}
+
+.champion-entry-stats {
+  font-size: 0.68rem;
+}
+
+.champion-entry-meta {
+  font-size: 0.64rem;
+}
+
+.champion-buckets-single .champion-entry {
+  padding: 0.3rem;
 }
 
 .champion-bucket-row {
@@ -1459,8 +1515,14 @@
   }
 
   .champion-bucket-link:hover,
-  .champion-bucket-link:focus-visible {
+  .champion-bucket-link:focus-visible,
+  .champion-entry-link:hover,
+  .champion-entry-link:focus-visible {
     background: #1e1b4b;
+  }
+
+  .champion-bucket-block {
+    border-top-color: #1f2937;
   }
 }
 

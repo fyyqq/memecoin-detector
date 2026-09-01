@@ -8,14 +8,19 @@ use App\Models\MonthlyRanking;
 use Carbon\CarbonImmutable;
 
 /**
- * One candidate #1-performing memecoin for a month + chain bucket (Step 25),
- * returned by a {@see MonthlyChampionResearchProvider}.
+ * One candidate for a month + chain bucket Top 3 (Step 25), returned by a
+ * {@see MonthlyChampionResearchProvider}.
  *
  * Providers NEVER fabricate: every candidate must be identity-resolvable
  * (name + symbol + chain, ideally a contract address) and carry the sources
  * that support it. The service re-validates eligibility ($5M–$200M MARKET CAP —
  * never FDV, the right bucket, the right month, ≤ 30-day trading age) and ranks
- * survivors with the deterministic performance formula.
+ * survivors with the deterministic participation formula
+ * ({@see MonthlyPerformanceCalculator::scoreHistorical}).
+ *
+ * `holderCount` / `volumeUsd` are the participation inputs. A `null` value is
+ * honestly UNKNOWN — it is dropped from the score, never treated as 0, never a
+ * current count standing in for a past month.
  */
 final class MonthlyResearchCandidate
 {
@@ -30,9 +35,12 @@ final class MonthlyResearchCandidate
         public readonly ?string $tokenAddress,
         public readonly ?string $imageUrl,
         public readonly ?float $baselineMarketCap,
+        /** Month-peak OBSERVED / VERIFIED market cap (never FDV). */
         public readonly ?float $peakMarketCap,
-        /** A market-activity proxy (median/representative 24h volume in USD), if known. */
+        /** Representative monthly volume in USD, if known. */
         public readonly ?float $volumeUsd,
+        /** Monthly-representative holder count, if known — never a current count. */
+        public readonly ?int $holderCount,
         /** Best defensible earliest trading / pool date — NOT "token creation date". */
         public readonly ?CarbonImmutable $launchDate,
         public readonly bool $ageUncertain,
@@ -46,6 +54,9 @@ final class MonthlyResearchCandidate
         public readonly ?int $tokenId = null,
         /** Filled by the scorer. */
         public ?float $performanceScore = null,
+        public ?float $holderStrength = null,
+        public ?float $volumeStrength = null,
+        public ?float $marketCapStrength = null,
         public ?float $marketCapGrowthPct = null,
         public ?float $peakExpansionRatio = null,
         public ?float $activityScore = null,
@@ -77,6 +88,12 @@ final class MonthlyResearchCandidate
     public function sourceCount(): int
     {
         return count($this->sources);
+    }
+
+    /** A stable per-token key for a deterministic tie-break. */
+    public function tokenKey(): string
+    {
+        return mb_strtolower(trim($this->chainId)).':'.mb_strtolower(trim((string) $this->tokenAddress)).':'.mb_strtolower(trim($this->symbol));
     }
 
     /** Peak market cap is present AND inside the $5M–$200M band. */

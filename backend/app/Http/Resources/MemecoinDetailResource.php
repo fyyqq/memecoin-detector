@@ -297,11 +297,13 @@ class MemecoinDetailResource extends JsonResource
                 'month' => $r->month,
                 'month_name' => CarbonImmutable::create($r->year, $r->month, 1)->format('F'),
                 'chain_bucket' => $r->chain_bucket,
+                'rank' => (int) $r->rank,
                 'status' => $r->status,
                 'performance_score' => $r->performance_score,
-                'market_cap_growth_pct' => $r->market_cap_growth_pct,
-                'baseline_market_cap' => $r->baseline_market_cap,
-                'peak_market_cap' => $r->peak_market_cap,
+                'holder_count' => $r->holder_count,               // null => UNKNOWN
+                'monthly_volume' => $r->monthly_volume_usd,
+                'market_cap' => $r->month_market_cap,             // month-peak observed/verified MC
+                'market_cap_growth_pct' => $r->market_cap_growth_pct,   // info-only
                 'observation_coverage_ratio' => $r->observation_coverage_ratio,
                 'source_type' => $r->source_type,
                 'source_reference' => $r->source_reference,
@@ -309,7 +311,7 @@ class MemecoinDetailResource extends JsonResource
                 'age_uncertain' => (bool) $r->age_uncertain,
                 'confidence' => $r->confidence,
                 'finalized_at' => $r->finalized_at?->toIso8601String(),
-            ])->values()->all(),
+            ])->sortBy(fn (array $c): string => sprintf('%04d%02d%d', $c['year'], $c['month'], $c['rank']))->values()->all(),
         ];
     }
 

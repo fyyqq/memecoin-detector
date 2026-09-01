@@ -223,9 +223,9 @@ function DetailView({ detail, retrievedAt }: DetailViewProps) {
         <QualificationTimeline detail={detail} />
       </Section>
 
-      {/* 4c. MONTHLY CHAIN CHAMPION */}
+      {/* 4c. MONTHLY TOP PERFORMER */}
       {detail.monthly_champion.is_champion && (
-        <Section title="Monthly Chain Champion">
+        <Section title="Monthly Top Performer">
           <MonthlyChampionBlock detail={detail} />
         </Section>
       )}
@@ -610,39 +610,40 @@ function hostOfSafe(url: string | null): string {
 }
 
 function MonthlyChampionBlock({ detail }: { detail: MemecoinDetail }) {
-  const championships = detail.monthly_champion.championships
+  const MEDALS = ['🥇', '🥈', '🥉']
+  const championships = [...detail.monthly_champion.championships].sort(
+    (a, b) => b.year - a.year || b.month - a.month || a.rank - b.rank,
+  )
 
   return (
     <div className="timeline-card">
       <p className="muted detail-note">
-        Top-1 performer in its chain bucket for the month, by observed market-cap growth within the
-        eligible universe. Not a best investment, best return, or safest coin — a monthly
-        observed-performance record per chain only.
+        Top 3 participation record in its chain bucket for the month — ranked by holder count,
+        representative monthly volume and month-peak observed/verified market cap. Not a best
+        investment, best return, or safest coin.
       </p>
       <div className="champion-detail-list">
         {championships.map((c) => (
-          <div key={`${c.year}-${c.month}-${c.chain_bucket}`} className="champion-detail">
+          <div key={`${c.year}-${c.month}-${c.chain_bucket}-${c.rank}`} className="champion-detail">
             <p className="champion-detail-head">
-              <span aria-hidden="true">🥇</span> {c.month_name} {c.year} —{' '}
-              {CHAIN_BUCKET_LABELS[c.chain_bucket] ?? c.chain_bucket} #1
+              <span aria-hidden="true">{MEDALS[c.rank - 1] ?? `#${c.rank}`}</span> {c.month_name}{' '}
+              {c.year} — {CHAIN_BUCKET_LABELS[c.chain_bucket] ?? c.chain_bucket} · Rank #{c.rank}
               <span className={`champion-status champion-status-${c.status}`}>
                 {MONTHLY_STATUS_LABELS[c.status] ?? c.status}
               </span>
             </p>
             <div className="detail-grid">
               <Field label="Chain bucket">{CHAIN_BUCKET_LABELS[c.chain_bucket] ?? c.chain_bucket}</Field>
-              <Field label="Observed MC growth">
-                {c.market_cap_growth_pct != null ? formatPercentCompact(c.market_cap_growth_pct) : '—'}
+              <Field label="Holder count">
+                {c.holder_count != null ? formatInteger(c.holder_count) : 'Unknown'}
               </Field>
-              <Field label="Baseline MC">{show(c.baseline_market_cap, formatUsd)}</Field>
-              <Field label="Peak MC">{show(c.peak_market_cap, formatUsd)}</Field>
+              <Field label="Monthly volume">{show(c.monthly_volume, formatUsd)}</Field>
+              <Field label="Market cap (month peak)">{show(c.market_cap, formatUsd)}</Field>
               <Field label="Performance score">
                 {c.performance_score != null ? `${c.performance_score} / 100` : '—'}
               </Field>
-              <Field label="Observation coverage">
-                {c.observation_coverage_ratio != null
-                  ? `${Math.round(c.observation_coverage_ratio * 100)}%`
-                  : '—'}
+              <Field label="MC growth (context)">
+                {c.market_cap_growth_pct != null ? formatPercentCompact(c.market_cap_growth_pct) : '—'}
               </Field>
               <Field label="Historical source">
                 {c.source_type ? (MONTHLY_SOURCE_LABELS[c.source_type] ?? c.source_type) : '—'}
@@ -674,14 +675,10 @@ function MonthlyChampionBlock({ detail }: { detail: MemecoinDetail }) {
               </div>
             )}
 
-            {c.status === 'best_supported_candidate' && (
-              <p className="muted">
-                This is the best-supported historical candidate based on available evidence; it is
-                not necessarily an exact DexScreener historical rank.
-              </p>
-            )}
             {c.source_type !== 'exact_dexscreener_rank' && c.source_type !== 'internal_observed' && (
-              <p className="muted">Best-supported monthly performer — not a &ldquo;Top DexScreener coin&rdquo; claim.</p>
+              <p className="muted">
+                Best-supported historical performer — not a claimed exact DexScreener rank.
+              </p>
             )}
           </div>
         ))}

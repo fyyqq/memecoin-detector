@@ -392,9 +392,9 @@ export interface MemecoinDetail {
 }
 
 /**
- * `data.monthly_champion` (Step 22, corrected) — the (month, chain-bucket) slots
- * this token led as "Monthly Chain Champion". `championships: []` when it never
- * led a bucket.
+ * `data.monthly_champion` (Step 25, Top 3) — the (month, chain-bucket, rank)
+ * slots this token holds in "Monthly Top Memecoins". `championships: []` when it
+ * has never been ranked.
  */
 export interface MemecoinMonthlyChampion {
   is_champion: boolean
@@ -403,11 +403,13 @@ export interface MemecoinMonthlyChampion {
     month: number
     month_name: string
     chain_bucket: 'solana' | 'robinhood' | 'bsc' | 'base' | 'other'
-    status: 'finalized' | 'provisional' | 'best_supported_candidate'
+    rank: number
+    status: 'finalized' | 'provisional'
     performance_score: number | null
+    holder_count: number | null
+    monthly_volume: number | null
+    market_cap: number | null
     market_cap_growth_pct: number | null
-    baseline_market_cap: number | null
-    peak_market_cap: number | null
     observation_coverage_ratio: number | null
     source_type:
       | 'internal_observed'

@@ -7,7 +7,7 @@ namespace App\Services\Ranking;
 final readonly class MonthlyChampionRunResult
 {
     /**
-     * @param  list<array<string,mixed>>  $months  one entry per (month, bucket) touched
+     * @param  list<array<string,mixed>>  $months  one entry per ranked row touched
      */
     public function __construct(
         public array $months,
@@ -25,13 +25,12 @@ final readonly class MonthlyChampionRunResult
     public function toArray(): array
     {
         return [
-            'finalized' => $this->finalized,
-            'provisional' => $this->provisional,
-            'best_supported_candidate' => $this->bestSupportedCandidate,
-            'no_verified_champion' => $this->noVerifiedChampion,
+            'finalized_buckets' => $this->finalized,
+            'provisional_buckets' => $this->provisional,
+            'no_verified_result_buckets' => $this->noVerifiedChampion,
             'skipped_settled' => $this->skippedSettled,
             'duration_seconds' => $this->durationSeconds,
-            'buckets_touched' => count($this->months),
+            'rows_touched' => count($this->months),
         ];
     }
 }

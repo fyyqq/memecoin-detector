@@ -135,18 +135,17 @@ export const CHAIN_BUCKET_LABEL: Record<ChainBucket, string> = {
 }
 
 /**
- * Per-bucket status:
- *   provisional              — current month, may still change
- *   finalized                — past month, sufficient internal evidence
- *   best_supported_candidate — past month, a real token led but evidence is thin
- *   no_verified_champion     — past month, no defensible winner
- *   future                   — the month has not happened yet
+ * Per-bucket status (Step 25, Top 3):
+ *   provisional          — current month, entries may still change
+ *   finalized            — completed month with defensible ranked entries
+ *                          (an entry may carry `confidence: low` where thin)
+ *   no_verified_result   — completed month, no defensible candidate, entries: []
+ *   future               — the month has not happened yet, entries: []
  */
 export type MonthlyBucketStatus =
   | 'provisional'
   | 'finalized'
-  | 'best_supported_candidate'
-  | 'no_verified_champion'
+  | 'no_verified_result'
   | 'future'
 
 /** Month-level status. */
@@ -160,7 +159,7 @@ export type MonthlySourceType =
   | 'web_research'
   | 'other_verified_source'
 
-/** One research source behind a historically-backfilled champion (Step 25). */
+/** One research source behind a historically-backfilled entry (Step 25). */
 export interface MonthlySourceEvidence {
   name: string
   url: string | null
@@ -170,41 +169,56 @@ export interface MonthlySourceEvidence {
 }
 
 export interface MonthlyChampionPerformance {
-  /** Transparent 0–100 performance score. NOT a prediction of returns. */
+  /** Transparent 0–100 participation score. NOT a prediction of returns. */
   score: number | null
-  baseline_market_cap: number | null
-  peak_market_cap: number | null
+  /** Monthly-max holder count — `null` means UNKNOWN (never shown as a number). */
+  holder_count: number | null
+  /** Representative monthly volume in USD. */
+  monthly_volume: number | null
+  /** Month-peak OBSERVED / VERIFIED market cap (never FDV, never current). */
+  market_cap: number | null
+  holder_strength: number | null
+  volume_strength: number | null
+  market_cap_strength: number | null
+  /** Info-only context — never part of the score or the ordering. */
   market_cap_growth_pct: number | null
   peak_expansion_ratio: number | null
-  activity_score: number | null
-  observation_count: number | null
   observation_coverage_ratio: number | null
 }
 
-export interface MonthlyChampionBucket {
+export interface MonthlyChampionToken {
+  id: number | null
+  symbol: string | null
+  name: string | null
+  /** The token's real chain. */
+  chain_id: string
+  /** The display bucket (may be "other"). */
   chain_bucket: ChainBucket
-  status: MonthlyBucketStatus
-  token: {
-    id: number
-    symbol: string | null
-    name: string | null
-    /** The token's real chain. */
-    chain_id: string
-    /** The display bucket (may be "other"). */
-    chain_bucket: ChainBucket
-    token_address: string
-    image_url: string | null
-  } | null
-  performance: MonthlyChampionPerformance | null
+  token_address: string
+  image_url: string | null
+}
+
+/** One ranked entry within a bucket (rank 1–3). */
+export interface MonthlyChampionEntry {
+  rank: number
+  token: MonthlyChampionToken | null
+  performance: MonthlyChampionPerformance
   source_type: MonthlySourceType | null
   source_reference: string | null
-  /** Research provenance for a historically-backfilled champion. `[]` otherwise. */
+  /** Research provenance for a historically-backfilled entry. `[]` otherwise. */
   source_evidence: MonthlySourceEvidence[]
   /** The 30-day trading-age window could not be established from evidence. */
   age_uncertain: boolean
   confidence: 'high' | 'medium' | 'low' | null
   finalized_at: string | null
   computed_at: string | null
+}
+
+export interface MonthlyChampionBucket {
+  chain_bucket: ChainBucket
+  status: MonthlyBucketStatus
+  /** 0–3 ranked entries. Empty for `future` / `no_verified_result`. */
+  entries: MonthlyChampionEntry[]
 }
 
 export interface MonthlyChampionMonth {
@@ -224,6 +238,8 @@ export interface MonthlyChampionsResponse {
     current_year: number
     current_month: number
     buckets: ChainBucket[]
+    top_n: number
+    weights: { holder: number; volume: number; market_cap: number }
     retrieved_at: string
     source: string
     selection_note: string

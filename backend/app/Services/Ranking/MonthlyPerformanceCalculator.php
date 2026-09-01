@@ -11,30 +11,41 @@ use Carbon\CarbonImmutable;
 use Illuminate\Support\Collection;
 
 /**
- * Evaluates ONE token's performance for ONE calendar month — deterministically.
+ * Evaluates ONE token's monthly performance for the "Monthly Top Memecoins"
+ * Top-3 (Step 25) — deterministically, from OBSERVED / VERIFIED data only.
  *
- * All figures come from OBSERVED / VERIFIED market cap in the month's
- * `MarketSnapshot`s only. FDV, historical estimates and external estimates are
- * NEVER used for monthly-championship scoring.
+ * The selection score rewards real PARTICIPATION:
  *
- * Score = 100 * ( w_growth   * growth_score
- *               + w_expansion * expansion_score
- *               + w_activity  * activity_score ), each sub-score in [0, 1],
- * normalized with a deterministic capped-log so extreme outliers do not
- * dominate. See docs/monthly-rankings.md for the exact formulas.
+ *   strength(x, ref) = min(1, ln(1 + x) / ln(1 + ref))          (capped-log)
  *
- * The score is NOT a prediction of future returns.
+ *   holder_strength     = strength(holder_count,       ref.holder_count)
+ *   volume_strength     = strength(monthly_volume_usd, ref.volume_usd)
+ *   market_cap_strength = strength(month_peak_mc,      ref.market_cap_usd)
+ *
+ *   score = 100 · Σ(w · strength) / Σ(w)     over the KNOWN components
+ *
+ * default weights holder 0.40 / volume 0.35 / market_cap 0.25 (env-configurable,
+ * `config/ranking.php`). A `null` holder_count is UNKNOWN — it drops out of the
+ * sum and the remaining weights renormalize (it is never silently treated as 0).
+ * Market cap is SUPPORTING — a $150M token does NOT automatically beat a $20M
+ * token with far stronger holders + volume.
+ *
+ * FDV, `HISTORICAL_ESTIMATE`, external estimates, the Risk Assessment, AI and
+ * social sentiment are NEVER used. `market_cap_growth_pct` / `peak_expansion_ratio`
+ * / `activity_score` are still computed but are INFO-ONLY context.
  */
 class MonthlyPerformanceCalculator
 {
     /**
      * @param  Collection<int, MarketSnapshot>  $monthSnapshots  the token's snapshots whose
      *                                                           `observed_at` falls inside `$window`
+     * @param  int|null  $holderCount  monthly-max holder count from the holder pass (null = UNKNOWN)
      */
     public function evaluate(
         Token $token,
         Collection $monthSnapshots,
         MonthWindow $window,
+        ?int $holderCount,
         CarbonImmutable $now,
     ): MonthlyCandidate {
         $cfg = (array) config('ranking');
@@ -46,6 +57,13 @@ class MonthlyPerformanceCalculator
             token: $token,
             status: MonthlyCandidate::STATUS_INELIGIBLE,
             ineligibleReason: $reason,
+            holderCount: null,
+            monthlyVolumeUsd: null,
+            monthMarketCap: null,
+            holderStrength: null,
+            volumeStrength: null,
+            marketCapStrength: null,
+            performanceScore: null,
             baselineMarketCap: null,
             peakMarketCap: null,
             marketCapGrowthPct: null,
@@ -53,13 +71,12 @@ class MonthlyPerformanceCalculator
             activityScore: null,
             observationCount: 0,
             observationCoverageRatio: null,
-            performanceScore: null,
             breakdown: ['reason' => $reason],
         );
 
-        // 1. Token belongs to the eligible trending universe (Step 19 rule):
-        //    a VERIFIED / OBSERVED market cap peak in [$5M, $200M].
-        //    HISTORICAL_ESTIMATE and UNKNOWN never qualify.
+        // 1. Token belongs to the eligible universe (Step 19): a VERIFIED /
+        //    OBSERVED market-cap peak in [$5M, $200M]. HISTORICAL_ESTIMATE and
+        //    UNKNOWN never qualify.
         if ($token->earliest_pair_created_at === null) {
             return $ineligible('no_pool_creation_timestamp');
         }
@@ -67,8 +84,7 @@ class MonthlyPerformanceCalculator
             return $ineligible('token_not_in_5m_200m_universe');
         }
 
-        // 2. A token that reached > $200M AT ANY POINT in the month is out —
-        //    even if it later fell back.
+        // 2. A token that reached > $200M AT ANY POINT in the month is out.
         $anyAboveCeiling = $monthSnapshots->contains(
             fn (MarketSnapshot $s): bool => $s->market_cap !== null && $s->market_cap > $max,
         );
@@ -76,7 +92,7 @@ class MonthlyPerformanceCalculator
             return $ineligible('exceeded_200m_ceiling_in_month');
         }
 
-        // 3. Eligible snapshots for this month: real MC, in band, age <= 30d,
+        // 3. Eligible snapshots for this month: real MC in band, age <= 30d,
         //    volume > 0, liquidity > 0.
         $ageCutoff = $token->earliest_pair_created_at->addDays($maxAgeDays);
         $eligible = $monthSnapshots
@@ -94,34 +110,28 @@ class MonthlyPerformanceCalculator
             return $ineligible('no_eligible_snapshot_in_month');
         }
 
-        // 4. Baseline = earliest eligible snapshot IN THE MONTH.
+        // 4. Month peak = highest eligible MC in the month (the MC-strength basis).
         $baseline = (float) $eligible->first()->market_cap;
-        if ($baseline <= 0.0) {
-            return $ineligible('invalid_baseline');
-        }
-
-        // 5. Peak = highest eligible snapshot MC in the month.
         $peak = (float) $eligible->max('market_cap');
         if ($peak < $min) {
             return $ineligible('month_peak_below_5m');
         }
 
-        // 6. Growth + expansion.
-        $growthPct = ($peak - $baseline) / $baseline * 100.0;
-        $expansionRatio = $peak / $baseline;
+        // 5. Representative monthly volume — MEDIAN in-month `volume_h24`. We do
+        //    NOT sum rolling-24h samples (that double-counts).
+        $monthlyVolume = $this->median($eligible->pluck('volume_h24'));
+        if ($monthlyVolume <= 0.0) {
+            return $ineligible('no_month_volume');
+        }
+
+        // 6. Info-only growth / expansion.
+        $growthPct = $baseline > 0.0 ? ($peak - $baseline) / $baseline * 100.0 : null;
+        $expansionRatio = $baseline > 0.0 ? $peak / $baseline : null;
 
         // 7. Observation coverage over the token's POSSIBLE in-month window.
         $intervalMinutes = max(1, (int) ($cfg['observation_interval_minutes'] ?? 10));
-        $windowStart = $this->maxDate([
-            $window->start,
-            $token->first_observed_at,
-            $token->earliest_pair_created_at,
-        ]);
-        $windowEnd = $this->minDate([
-            $window->endExclusive,
-            $ageCutoff,
-            $now,
-        ]);
+        $windowStart = $this->maxDate([$window->start, $token->first_observed_at, $token->earliest_pair_created_at]);
+        $windowEnd = $this->minDate([$window->endExclusive, $ageCutoff, $now]);
         $expected = 1;
         if ($windowEnd->greaterThan($windowStart)) {
             $minutes = ($windowEnd->getTimestamp() - $windowStart->getTimestamp()) / 60.0;
@@ -130,19 +140,11 @@ class MonthlyPerformanceCalculator
         $observationCount = $eligible->count();
         $coverage = min(1.0, $observationCount / $expected);
 
-        // 8. Activity (supporting evidence only).
+        // 8. The three strengths + renormalized score.
+        [$score, $holderStrength, $volumeStrength, $marketCapStrength, $weights] =
+            $this->participationScore($holderCount, $monthlyVolume, $peak);
+
         $activityUnit = $this->activityScore($eligible, (array) ($cfg['activity'] ?? []));
-
-        // 9. Score.
-        $growthScore = $this->normLog($growthPct / 100.0, (float) ($cfg['growth_reference'] ?? 20.0));
-        $expansionScore = $this->expansionScore($expansionRatio, (float) ($cfg['expansion_reference'] ?? 25.0));
-
-        $w = (array) ($cfg['weights'] ?? []);
-        $wg = (float) ($w['growth'] ?? 0.60);
-        $we = (float) ($w['expansion'] ?? 0.25);
-        $wa = (float) ($w['activity'] ?? 0.15);
-
-        $score = round(100.0 * max(0.0, min(1.0, $wg * $growthScore + $we * $expansionScore + $wa * $activityUnit)), 2);
 
         $minCoverage = (float) ($cfg['min_observation_coverage'] ?? 0.25);
         $status = $coverage < $minCoverage
@@ -153,25 +155,149 @@ class MonthlyPerformanceCalculator
             token: $token,
             status: $status,
             ineligibleReason: null,
+            holderCount: $holderCount,
+            monthlyVolumeUsd: round($monthlyVolume, 2),
+            monthMarketCap: round($peak, 2),
+            holderStrength: $holderStrength !== null ? round($holderStrength, 4) : null,
+            volumeStrength: round($volumeStrength, 4),
+            marketCapStrength: round($marketCapStrength, 4),
+            performanceScore: $score,
             baselineMarketCap: round($baseline, 2),
             peakMarketCap: round($peak, 2),
-            marketCapGrowthPct: round($growthPct, 2),
-            peakExpansionRatio: round($expansionRatio, 4),
+            marketCapGrowthPct: $growthPct !== null ? round($growthPct, 2) : null,
+            peakExpansionRatio: $expansionRatio !== null ? round($expansionRatio, 4) : null,
             activityScore: round($activityUnit * 100.0, 2),
             observationCount: $observationCount,
             observationCoverageRatio: round($coverage, 4),
-            performanceScore: $score,
             breakdown: [
-                'weights' => ['growth' => $wg, 'expansion' => $we, 'activity' => $wa],
-                'growth_score' => round($growthScore, 4),
-                'expansion_score' => round($expansionScore, 4),
-                'activity_score' => round($activityUnit, 4),
-                'growth_reference' => (float) ($cfg['growth_reference'] ?? 20.0),
-                'expansion_reference' => (float) ($cfg['expansion_reference'] ?? 25.0),
+                'method' => 'internal_observed',
+                'weights' => $weights,
+                'holder_count' => $holderCount,
+                'holder_strength' => $holderStrength !== null ? round($holderStrength, 4) : null,
+                'volume_strength' => round($volumeStrength, 4),
+                'market_cap_strength' => round($marketCapStrength, 4),
+                'monthly_volume_usd' => round($monthlyVolume, 2),
+                'month_peak_market_cap' => round($peak, 2),
+                'context' => [
+                    'growth_pct' => $growthPct !== null ? round($growthPct, 2) : null,
+                    'expansion_ratio' => $expansionRatio !== null ? round($expansionRatio, 4) : null,
+                    'activity_score' => round($activityUnit, 4),
+                ],
                 'expected_observations' => $expected,
                 'min_observation_coverage' => $minCoverage,
             ],
         );
+    }
+
+    /**
+     * Score a HISTORICALLY-RESEARCHED candidate — the SAME participation formula
+     * as {@see evaluate()}, from research evidence instead of our snapshots.
+     * `null` holder count / volume are honestly UNKNOWN (the score renormalizes;
+     * a candidate with no known volume AND no known market cap scores `null`).
+     *
+     * @return array{performance_score:?float,holder_strength:?float,volume_strength:?float,market_cap_strength:?float,market_cap_growth_pct:?float,peak_expansion_ratio:?float,breakdown:array<string,mixed>}
+     */
+    public function scoreHistorical(?float $baseline, ?float $monthPeakMc, ?float $volumeUsd, ?int $holderCount): array
+    {
+        $volume = $volumeUsd !== null && $volumeUsd > 0.0 ? $volumeUsd : null;
+
+        if ($volume === null && ($monthPeakMc === null || $monthPeakMc <= 0.0)) {
+            // Nothing to score by — never rank by holders alone or size alone.
+            return [
+                'performance_score' => null,
+                'holder_strength' => null,
+                'volume_strength' => null,
+                'market_cap_strength' => null,
+                'market_cap_growth_pct' => null,
+                'peak_expansion_ratio' => null,
+                'breakdown' => ['method' => 'historical_research', 'reason' => 'no_volume_or_market_cap'],
+            ];
+        }
+
+        [$score, $holderStrength, $volumeStrength, $marketCapStrength, $weights] =
+            $this->participationScore($holderCount, $volume ?? 0.0, $monthPeakMc ?? 0.0, allowMissingVolume: $volume === null, allowMissingMarketCap: $monthPeakMc === null || $monthPeakMc <= 0.0);
+
+        // "Never rank by market-cap size alone." A researched candidate with only
+        // a market cap (no holder count, no volume) is capped so it can still be
+        // recorded but can never beat a candidate with real holder + volume
+        // participation.
+        $marketCapOnly = $holderCount === null && $volume === null && $monthPeakMc !== null && $monthPeakMc > 0.0;
+        if ($marketCapOnly && $score !== null) {
+            $penalty = max(0.0, min(1.0, (float) (config('ranking.market_cap_only_penalty', 0.5))));
+            $score = round($score * $penalty, 2);
+        }
+
+        $growthPct = ($baseline !== null && $baseline > 0.0 && $monthPeakMc !== null && $monthPeakMc > 0.0)
+            ? round(($monthPeakMc - $baseline) / $baseline * 100.0, 2) : null;
+        $expansion = ($baseline !== null && $baseline > 0.0 && $monthPeakMc !== null && $monthPeakMc > 0.0)
+            ? round($monthPeakMc / $baseline, 4) : null;
+
+        return [
+            'performance_score' => $score,
+            'holder_strength' => $holderStrength !== null ? round($holderStrength, 4) : null,
+            'volume_strength' => $volume !== null ? round($volumeStrength, 4) : null,
+            'market_cap_strength' => ($monthPeakMc !== null && $monthPeakMc > 0.0) ? round($marketCapStrength, 4) : null,
+            'market_cap_growth_pct' => $growthPct,
+            'peak_expansion_ratio' => $expansion,
+            'breakdown' => [
+                'method' => 'historical_research',
+                'weights' => $weights,
+                'holder_count' => $holderCount,
+                'monthly_volume_usd' => $volume,
+                'month_peak_market_cap' => $monthPeakMc,
+            ],
+        ];
+    }
+
+    /**
+     * `[score 0..100, holderStrength|null, volumeStrength, marketCapStrength, weightsUsed]`.
+     * A component is dropped from the weighted mean when its input is unknown
+     * (holder count null; or, for research, volume / market cap absent).
+     *
+     * @return array{0:?float,1:?float,2:float,3:float,4:array<string,float>}
+     */
+    private function participationScore(
+        ?int $holderCount,
+        float $volumeUsd,
+        float $marketCapUsd,
+        bool $allowMissingVolume = false,
+        bool $allowMissingMarketCap = false,
+    ): array {
+        $cfg = (array) config('ranking');
+        $w = (array) ($cfg['weights'] ?? []);
+        $wh = (float) ($w['holder'] ?? 0.40);
+        $wv = (float) ($w['volume'] ?? 0.35);
+        $wmc = (float) ($w['market_cap'] ?? 0.25);
+        $ref = (array) ($cfg['references'] ?? []);
+
+        $holderStrength = $holderCount !== null && $holderCount > 0
+            ? $this->normLog((float) $holderCount, (float) ($ref['holder_count'] ?? 10_000))
+            : null;
+        $volumeStrength = $this->normLog(max(0.0, $volumeUsd), (float) ($ref['volume_usd'] ?? 20_000_000));
+        $marketCapStrength = $this->normLog(max(0.0, $marketCapUsd), (float) ($ref['market_cap_usd'] ?? 50_000_000));
+
+        $num = 0.0;
+        $den = 0.0;
+        $used = [];
+        if ($holderStrength !== null) {
+            $num += $wh * $holderStrength;
+            $den += $wh;
+            $used['holder'] = $wh;
+        }
+        if (! $allowMissingVolume) {
+            $num += $wv * $volumeStrength;
+            $den += $wv;
+            $used['volume'] = $wv;
+        }
+        if (! $allowMissingMarketCap) {
+            $num += $wmc * $marketCapStrength;
+            $den += $wmc;
+            $used['market_cap'] = $wmc;
+        }
+
+        $score = $den > 0.0 ? round(100.0 * max(0.0, min(1.0, $num / $den)), 2) : null;
+
+        return [$score, $holderStrength, $volumeStrength, $marketCapStrength, $used];
     }
 
     private function tokenInEligibleUniverse(Token $token, float $min, float $max): bool
@@ -187,14 +313,11 @@ class MonthlyPerformanceCalculator
             return false;
         }
 
-        // Never re-admit a token whose verified/observed peak EVER exceeded $200M.
         $greatestPeak = max(
             (float) ($token->observed_peak_market_cap ?? 0.0),
             (float) ($token->historical_peak_value ?? 0.0),
         );
 
-        // A stored HISTORICAL_ESTIMATE / UNKNOWN status never satisfies the
-        // universe on its own (handled by qualifies() + the observed path).
         if (in_array($token->historical_peak_status, [
             HistoricalPeakEvidence::STATUS_HISTORICAL_ESTIMATE,
         ], true) && ! $viaObserved) {
@@ -212,18 +335,9 @@ class MonthlyPerformanceCalculator
     {
         $weights = (array) ($activityCfg['weights'] ?? []);
 
-        $volume = $this->normLog(
-            $this->median($eligible->pluck('volume_h24')),
-            (float) ($activityCfg['volume_reference'] ?? 500_000),
-        );
-        $liquidity = $this->normLog(
-            $this->median($eligible->pluck('liquidity_usd')),
-            (float) ($activityCfg['liquidity_reference'] ?? 250_000),
-        );
-        $txns = $this->normLog(
-            $this->median($eligible->pluck('txns_h24')),
-            (float) ($activityCfg['txns_reference'] ?? 2_000),
-        );
+        $volume = $this->normLog($this->median($eligible->pluck('volume_h24')), (float) ($activityCfg['volume_reference'] ?? 500_000));
+        $liquidity = $this->normLog($this->median($eligible->pluck('liquidity_usd')), (float) ($activityCfg['liquidity_reference'] ?? 250_000));
+        $txns = $this->normLog($this->median($eligible->pluck('txns_h24')), (float) ($activityCfg['txns_reference'] ?? 2_000));
         $priceChange = $this->normLog(
             $this->median($eligible->map(fn (MarketSnapshot $s): float => abs((float) ($s->price_change_h24 ?? 0.0)))),
             (float) ($activityCfg['price_change_reference'] ?? 50),
@@ -237,67 +351,7 @@ class MonthlyPerformanceCalculator
         ));
     }
 
-    /**
-     * Score a HISTORICALLY-RESEARCHED candidate from external market-cap figures
-     * — the SAME deterministic formula as {@see evaluate()}, but the inputs come
-     * from research evidence instead of our snapshots. Used by
-     * {@see MonthlyChampionResearchService}.
-     *
-     * Growth needs both baseline + peak; with only a peak the score is null
-     * (we never rank by market-cap size). Activity is a volume-only proxy.
-     *
-     * @return array{performance_score:?float,market_cap_growth_pct:?float,peak_expansion_ratio:?float,activity_score:?float,breakdown:array<string,mixed>}
-     */
-    public function scoreHistorical(?float $baseline, ?float $peak, ?float $volumeUsd): array
-    {
-        $cfg = (array) config('ranking');
-        $w = (array) ($cfg['weights'] ?? []);
-        $wg = (float) ($w['growth'] ?? 0.60);
-        $we = (float) ($w['expansion'] ?? 0.25);
-        $wa = (float) ($w['activity'] ?? 0.15);
-
-        $activityRef = (float) (($cfg['activity']['volume_reference'] ?? 500_000));
-        $activityUnit = $volumeUsd !== null && $volumeUsd > 0.0
-            ? $this->normLog($volumeUsd, $activityRef)
-            : 0.0;
-
-        if ($baseline === null || $baseline <= 0.0 || $peak === null || $peak <= 0.0) {
-            return [
-                'performance_score' => null,
-                'market_cap_growth_pct' => null,
-                'peak_expansion_ratio' => null,
-                'activity_score' => round($activityUnit * 100.0, 2),
-                'breakdown' => ['reason' => 'incomplete_market_cap_figures', 'activity_score' => round($activityUnit, 4)],
-            ];
-        }
-
-        $growthPct = ($peak - $baseline) / $baseline * 100.0;
-        $expansionRatio = $peak / $baseline;
-
-        $growthScore = $this->normLog($growthPct / 100.0, (float) ($cfg['growth_reference'] ?? 20.0));
-        $expansionScore = $this->expansionScore($expansionRatio, (float) ($cfg['expansion_reference'] ?? 25.0));
-
-        $score = round(100.0 * max(0.0, min(1.0, $wg * $growthScore + $we * $expansionScore + $wa * $activityUnit)), 2);
-
-        return [
-            'performance_score' => $score,
-            'market_cap_growth_pct' => round($growthPct, 2),
-            'peak_expansion_ratio' => round($expansionRatio, 4),
-            'activity_score' => round($activityUnit * 100.0, 2),
-            'breakdown' => [
-                'weights' => ['growth' => $wg, 'expansion' => $we, 'activity' => $wa],
-                'growth_score' => round($growthScore, 4),
-                'expansion_score' => round($expansionScore, 4),
-                'activity_score' => round($activityUnit, 4),
-                'basis' => 'historical_research_market_cap',
-            ],
-        ];
-    }
-
-    /**
-     * Deterministic capped-log normalization to [0, 1]:
-     *   min(1, ln(1 + x) / ln(1 + reference))
-     */
+    /** Deterministic capped-log normalization to [0, 1]: min(1, ln(1+x) / ln(1+reference)). */
     private function normLog(float $value, float $reference): float
     {
         $value = max(0.0, $value);
@@ -306,16 +360,6 @@ class MonthlyPerformanceCalculator
         }
 
         return min(1.0, log(1.0 + $value) / log(1.0 + $reference));
-    }
-
-    private function expansionScore(float $ratio, float $reference): float
-    {
-        $ratio = max(1.0, $ratio);
-        if ($reference <= 1.0) {
-            return $ratio > 1.0 ? 1.0 : 0.0;
-        }
-
-        return min(1.0, log($ratio) / log($reference));
     }
 
     /**

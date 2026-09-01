@@ -22,7 +22,8 @@ use Throwable;
  * reputable historical market sources, resolves token identity, records
  * source URLs / claims / dates) and the deterministic pipeline. The file is
  * NEVER auto-generated from search-result snippets. Absent file / bad JSON =>
- * `[]` and the bucket stays `no_verified_champion` honestly.
+ * `[]` and the bucket stays `no_verified_result` honestly. Provide MULTIPLE
+ * candidates per `(year, month, chain_bucket)` — they are ranked into a Top 3.
  *
  * File shape:
  * {
@@ -33,6 +34,7 @@ use Throwable;
  *       "token_address": "...", "image_url": null,
  *       "baseline_market_cap": 6000000, "peak_market_cap": 45000000,
  *       "volume_usd": 12000000,
+ *       "holder_count": 18000,            // real positive integer ONLY; omit / null = UNKNOWN
  *       "launch_date": "2025-12-20", "age_uncertain": false,
  *       "source_type": "best_supported_historical_performer",
  *       "confidence": "medium",
@@ -40,7 +42,7 @@ use Throwable;
  *         { "name": "CoinGecko", "url": "https://...", "claim": "...",
  *           "published_at": "2026-02-01", "credibility": "historical_provider" }
  *       ],
- *       "explanation": "why this is the best-supported performer"
+ *       "explanation": "why this is a top-3 performer"
  *     }
  *   ]
  * }
@@ -157,6 +159,7 @@ class SeedFileMonthlyResearchProvider implements MonthlyChampionResearchProvider
             baselineMarketCap: $this->num($row['baseline_market_cap'] ?? null),
             peakMarketCap: $this->num($row['peak_market_cap'] ?? null),
             volumeUsd: $this->num($row['volume_usd'] ?? null),
+            holderCount: $this->holderCount($row['holder_count'] ?? null),
             launchDate: $this->date($row['launch_date'] ?? null),
             ageUncertain: filter_var($row['age_uncertain'] ?? false, FILTER_VALIDATE_BOOL),
             sourceType: $sourceType,
@@ -169,6 +172,16 @@ class SeedFileMonthlyResearchProvider implements MonthlyChampionResearchProvider
     private function num(mixed $v): ?float
     {
         return is_numeric($v) && (float) $v > 0.0 ? (float) $v : null;
+    }
+
+    /**
+     * A historical holder count is used ONLY when it is a real positive integer.
+     * Anything else (absent, `"UNKNOWN"`, 0, a string) is honestly UNKNOWN — it
+     * is never coerced to a number.
+     */
+    private function holderCount(mixed $v): ?int
+    {
+        return is_int($v) && $v > 0 ? $v : (is_numeric($v) && ! is_string($v) && (int) $v > 0 ? (int) $v : null);
     }
 
     private function date(mixed $v): ?CarbonImmutable

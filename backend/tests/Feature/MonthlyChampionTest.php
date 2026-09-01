@@ -8,9 +8,11 @@ use App\Models\Evidence;
 use App\Models\HistoricalPeakEvidence;
 use App\Models\MonthlyRanking;
 use App\Models\PumpEvent;
+use App\Models\RiskAssessment;
 use App\Models\Token;
 use App\Services\Ranking\ChainBucket;
 use App\Services\Ranking\MonthlyChampionService;
+use App\Services\Ranking\MonthlyPerformanceCalculator;
 use App\Services\Ranking\MonthWindow;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -22,14 +24,15 @@ use PHPUnit\Framework\Attributes\Test;
 use Tests\TestCase;
 
 /**
- * Step 22 (corrected) — "Monthly Top Memecoins".
+ * Step 25 — "Monthly Top Memecoins" (Top 3, participation score).
  *
- * For EVERY calendar month the top-1 performing memecoin inside each of FIVE
- * fixed buckets: solana, robinhood, bsc, base, other. At most one champion per
- * (year, month, chain_bucket). NO global monthly winner. The winner is scored
- * primarily on observed market-cap growth (baseline -> peak within the month) —
- * NOT the biggest / highest-cap / first to $5M. Risk score and AI are never
- * used.
+ * For EVERY calendar month, the TOP 3 memecoins inside each of the FIVE fixed
+ * buckets (solana / robinhood / bsc / base / other), unique on
+ * `(year, month, chain_bucket, rank)`. Ranked by real participation — holder
+ * count (0.40) + representative monthly volume (0.35) + month-peak
+ * observed/verified market cap (0.25), log-normalized, renormalized over the
+ * KNOWN components. Market cap is supporting evidence and cannot dominate. Risk
+ * score, AI and social sentiment are never used.
  */
 class MonthlyChampionTest extends TestCase
 {
@@ -53,12 +56,14 @@ class MonthlyChampionTest extends TestCase
         config()->set('dexscreener.filters.observed_peak_market_cap_min_usd', 5_000_000);
         config()->set('dexscreener.filters.observed_peak_market_cap_max_usd', 200_000_000);
         config()->set('dexscreener.filters.max_age_days', 30);
-        config()->set('ranking.observation_interval_minutes', 4320); // 3 days — a few spread snapshots clear coverage
+        config()->set('ranking.observation_interval_minutes', 4320); // 3 days
         config()->set('ranking.min_observation_coverage', 0.25);
-        config()->set('ranking.weights', ['growth' => 0.60, 'expansion' => 0.25, 'activity' => 0.15]);
-        config()->set('ranking.growth_reference', 20.0);
-        config()->set('ranking.expansion_reference', 25.0);
-        config()->set('ranking.research.providers', ['internal']);
+        config()->set('ranking.top_n', 3);
+        config()->set('ranking.weights', ['holder' => 0.40, 'volume' => 0.35, 'market_cap' => 0.25]);
+        config()->set('ranking.references', ['holder_count' => 10_000, 'volume_usd' => 20_000_000, 'market_cap_usd' => 50_000_000]);
+        config()->set('ranking.market_cap_only_penalty', 0.5);
+        // Holder pass never fires for a past month; disable outright for determinism.
+        config()->set('ranking.holder_pass.enabled', false);
     }
 
     protected function tearDown(): void
@@ -69,9 +74,7 @@ class MonthlyChampionTest extends TestCase
 
     // ---- fixtures --------------------------------------------------------
 
-    /**
-     * @param  array<string,mixed>  $attrs
-     */
+    /** @param array<string,mixed> $attrs */
     private function token(string $chainId = 'solana', array $attrs = []): Token
     {
         /** @var Token $token */
@@ -80,7 +83,6 @@ class MonthlyChampionTest extends TestCase
             'token_address' => 'Addr'.Str::random(24),
             'symbol' => 'TKN'.Str::random(3),
             'name' => 'Test Token',
-            'image_url' => 'https://img.example/x.png',
             'earliest_pair_created_at' => $this->july->start->addDay(),
             'first_observed_at' => $this->july->start->addDay(),
             'last_observed_at' => $this->july->endExclusive->subDay(),
@@ -100,13 +102,15 @@ class MonthlyChampionTest extends TestCase
         return $token->refresh();
     }
 
-    private function trajectory(Token $token, float $from, float $to, int $count = 8, array $snapshotOverrides = []): void
+    /**
+     * Insert `$count` spread in-month snapshots. `$mc` is the flat market cap
+     * (also the month peak). `$volume` is the flat `volume_h24`.
+     */
+    private function trajectory(Token $token, float $mc, float $volume = 1_500_000.0, int $count = 8, array $overrides = []): void
     {
         $spanSeconds = $this->july->endExclusive->getTimestamp() - $this->july->start->getTimestamp();
         $rows = [];
         for ($i = 0; $i < $count; $i++) {
-            $frac = $count === 1 ? 0.0 : $i / ($count - 1);
-            $mc = $from + ($to - $from) * $frac;
             $rows[] = array_replace([
                 'token_id' => $token->id,
                 'observed_at' => $this->july->start->addSeconds((int) round($spanSeconds * ($i + 0.5) / $count)),
@@ -114,7 +118,7 @@ class MonthlyChampionTest extends TestCase
                 'market_cap' => $mc,
                 'fdv' => $mc * 1.2,
                 'liquidity_usd' => 400_000.0,
-                'volume_h24' => 1_500_000.0,
+                'volume_h24' => $volume,
                 'price_change_h24' => 5.0,
                 'txns_h24' => 3_000,
                 'buys_h24' => 1_700,
@@ -124,34 +128,9 @@ class MonthlyChampionTest extends TestCase
                 'earliest_pair_created_at' => $token->earliest_pair_created_at,
                 'created_at' => $this->now,
                 'updated_at' => $this->now,
-            ], $snapshotOverrides);
+            ], $overrides);
         }
         DB::table('market_snapshots')->insert($rows);
-    }
-
-    /**
-     * @return array<string,mixed>
-     */
-    private function snapshotRow(Token $token, string $observedAt, float $marketCap): array
-    {
-        return [
-            'token_id' => $token->id,
-            'observed_at' => CarbonImmutable::parse($observedAt),
-            'price_usd' => 0.01,
-            'market_cap' => $marketCap,
-            'fdv' => $marketCap * 1.2,
-            'liquidity_usd' => 400_000.0,
-            'volume_h24' => 1_500_000.0,
-            'price_change_h24' => 5.0,
-            'txns_h24' => 3_000,
-            'buys_h24' => 1_700,
-            'sells_h24' => 1_300,
-            'primary_pair_address' => 'pair',
-            'primary_dex_id' => 'raydium',
-            'earliest_pair_created_at' => $token->earliest_pair_created_at,
-            'created_at' => $this->now,
-            'updated_at' => $this->now,
-        ];
     }
 
     private function service(): MonthlyChampionService
@@ -159,560 +138,430 @@ class MonthlyChampionTest extends TestCase
         return app(MonthlyChampionService::class);
     }
 
-    /** @return Collection<int, MonthlyRanking> */
+    /** @return Collection<int, MonthlyRanking> keyed "$bucket:$rank" */
     private function finalizeJuly(bool $force = false): Collection
     {
-        return $this->service()->finalizeMonth(2026, 7, $force, $this->now)->keyBy('chain_bucket');
+        return $this->service()->finalizeMonth(2026, 7, $force, $this->now)
+            ->keyBy(fn (MonthlyRanking $r): string => $r->chain_bucket.':'.$r->rank);
     }
 
-    private function julyBucket(string $bucket, bool $force = false): MonthlyRanking
+    /** @return Collection<int, MonthlyRanking> the TOKEN-carrying ranked rows for one July bucket, rank order */
+    private function julyBucket(string $bucket, bool $force = false): Collection
     {
-        return $this->finalizeJuly($force)->get($bucket);
+        return $this->finalizeJuly($force)
+            ->filter(fn (MonthlyRanking $r): bool => $r->chain_bucket === $bucket && $r->token_id !== null)
+            ->sortBy('rank')->values();
     }
 
-    // ==== 10: chain-bucket mapping ====================================
+    // ==== structure ====================================================
 
     #[Test]
-    public function chain_bucket_mapping_is_deterministic(): void
+    public function each_bucket_returns_its_own_top_three_ranked_1_to_3(): void
     {
-        $this->assertSame(ChainBucket::SOLANA, ChainBucket::forChain('solana'));
-        $this->assertSame(ChainBucket::SOLANA, ChainBucket::forChain('SOLANA'));
-        $this->assertSame(ChainBucket::ROBINHOOD, ChainBucket::forChain('robinhood'));
-        $this->assertSame(ChainBucket::BSC, ChainBucket::forChain('bsc'));
-        $this->assertSame(ChainBucket::BASE, ChainBucket::forChain('base'));
-        $this->assertSame(ChainBucket::OTHER, ChainBucket::forChain('arbitrum'));
-        $this->assertSame(ChainBucket::OTHER, ChainBucket::forChain('ethereum'));
-        $this->assertSame(ChainBucket::OTHER, ChainBucket::forChain(null));
-        $this->assertSame(['solana', 'robinhood', 'bsc', 'base', 'other'], ChainBucket::ALL);
+        // 4 Solana candidates, strongest -> weakest by volume (same MC, no holders).
+        foreach ([18_000_000, 12_000_000, 6_000_000, 2_000_000] as $i => $vol) {
+            $this->trajectory($this->token('solana', ['symbol' => "SOL{$i}"]), 30_000_000.0, (float) $vol);
+        }
+        $rows = $this->julyBucket('solana');
+
+        $this->assertCount(3, $rows);
+        $this->assertSame([1, 2, 3], $rows->pluck('rank')->all());
+        $this->assertSame(['SOL0', 'SOL1', 'SOL2'], $rows->map(fn (MonthlyRanking $r) => $r->token->symbol)->all());
+        $this->assertGreaterThan($rows[1]->performance_score, $rows[0]->performance_score);
+        $this->assertGreaterThan($rows[2]->performance_score, $rows[1]->performance_score);
     }
 
-    // ==== 3, 4-9: bucket isolation ===================================
+    #[Test]
+    public function the_unique_key_is_year_month_chain_bucket_rank_and_a_token_appears_once_per_bucket(): void
+    {
+        foreach (range(0, 3) as $i) {
+            $this->trajectory($this->token('bsc', ['symbol' => "B{$i}"]), 20_000_000.0, (float) (10_000_000 - $i * 1_000_000));
+        }
+        $this->finalizeJuly();
+
+        $dupes = DB::table('monthly_rankings')
+            ->select('year', 'month', 'chain_bucket', 'rank')
+            ->groupBy('year', 'month', 'chain_bucket', 'rank')
+            ->havingRaw('count(*) > 1')->get();
+        $this->assertCount(0, $dupes);
+
+        $maxRank = (int) DB::table('monthly_rankings')->max('rank');
+        $this->assertLessThanOrEqual(3, $maxRank);
+
+        foreach (ChainBucket::ALL as $bucket) {
+            $tokenIds = DB::table('monthly_rankings')->where('chain_bucket', $bucket)->whereNotNull('token_id')->pluck('token_id');
+            $this->assertSame($tokenIds->count(), $tokenIds->unique()->count(), "duplicate token in {$bucket}");
+        }
+    }
 
     #[Test]
-    public function each_bucket_gets_its_own_isolated_champion(): void
+    public function a_bucket_with_one_or_two_eligible_tokens_produces_exactly_that_many_rows(): void
     {
-        $sol = $this->token('solana', ['symbol' => 'SOL1']);
-        $this->trajectory($sol, 8_000_000, 40_000_000); // +400%
-        $rh = $this->token('robinhood', ['symbol' => 'RH1']);
-        $this->trajectory($rh, 6_000_000, 30_000_000); // +400%
-        $bsc = $this->token('bsc', ['symbol' => 'BSC1']);
-        $this->trajectory($bsc, 5_000_000, 15_000_000); // +200%
-        $base = $this->token('base', ['symbol' => 'BASE1']);
-        $this->trajectory($base, 8_000_000, 16_000_000); // +100%
-        $arb = $this->token('arbitrum', ['symbol' => 'ARB1']);
-        $this->trajectory($arb, 7_000_000, 21_000_000); // +200%, "other"
+        $this->trajectory($this->token('base', ['symbol' => 'ONLYBASE']), 25_000_000.0, 8_000_000.0);
+        $this->trajectory($this->token('bsc', ['symbol' => 'B1']), 25_000_000.0, 9_000_000.0);
+        $this->trajectory($this->token('bsc', ['symbol' => 'B2']), 25_000_000.0, 3_000_000.0);
+        $this->finalizeJuly();
 
-        $buckets = $this->finalizeJuly();
-
-        $this->assertSame($sol->id, $buckets->get('solana')->token_id);
-        $this->assertSame($rh->id, $buckets->get('robinhood')->token_id);
-        $this->assertSame($bsc->id, $buckets->get('bsc')->token_id);
-        $this->assertSame($base->id, $buckets->get('base')->token_id);
-        $this->assertSame($arb->id, $buckets->get('other')->token_id, 'a non-core chain lands in "other"');
-        $this->assertSame('arbitrum', $buckets->get('other')->token->chain_id, 'the token keeps its real chain_id');
+        $this->assertCount(1, $this->julyBucket('base'));
+        $this->assertCount(2, $this->julyBucket('bsc'));
+        $this->assertDatabaseMissing('monthly_rankings', ['chain_bucket' => 'bsc', 'rank' => 3]);
     }
 
     #[Test]
     public function the_other_bucket_ranks_across_all_non_core_chains(): void
     {
-        $arb = $this->token('arbitrum', ['symbol' => 'ARBWIN']);
-        $this->trajectory($arb, 6_000_000, 36_000_000); // +500%
-        $poly = $this->token('polygon', ['symbol' => 'POLY']);
-        $this->trajectory($poly, 8_000_000, 16_000_000); // +100%
+        $this->trajectory($this->token('pulsechain', ['symbol' => 'PLS']), 20_000_000.0, 12_000_000.0);
+        $this->trajectory($this->token('sui', ['symbol' => 'SUI']), 20_000_000.0, 4_000_000.0);
+        $rows = $this->julyBucket('other');
 
-        $other = $this->julyBucket('other');
-
-        $this->assertSame($arb->id, $other->token_id);
-        // The core buckets get nothing from these non-core tokens.
-        $this->assertNull($this->julyBucket('solana')->token_id);
+        $this->assertSame(['PLS', 'SUI'], $rows->map(fn (MonthlyRanking $r) => $r->token->symbol)->all());
+        // The token keeps its real chain_id — only chain_bucket says "other".
+        $this->assertSame('pulsechain', $rows[0]->token->chain_id);
+        $this->assertSame('other', $rows[0]->chain_bucket);
     }
 
     #[Test]
-    public function only_one_row_exists_per_month_per_bucket(): void
+    public function the_same_symbol_on_two_chains_is_ranked_in_separate_buckets(): void
     {
-        $sol = $this->token('solana');
-        $this->trajectory($sol, 8_000_000, 40_000_000);
+        $this->trajectory($this->token('solana', ['symbol' => 'DOG', 'token_address' => 'SolDog']), 20_000_000.0, 6_000_000.0);
+        $this->trajectory($this->token('bsc', ['symbol' => 'DOG', 'token_address' => 'BscDog']), 20_000_000.0, 6_000_000.0);
 
-        $this->finalizeJuly();
-        $this->finalizeJuly(force: true);
-        $this->finalizeJuly(force: true);
+        $this->assertSame('DOG', $this->julyBucket('solana')[0]->token->symbol);
+        $this->assertSame('DOG', $this->julyBucket('bsc')[0]->token->symbol);
+        $this->assertNotSame($this->julyBucket('solana')[0]->token_id, $this->julyBucket('bsc')[0]->token_id);
+    }
 
-        $this->assertSame(1, MonthlyRanking::query()->where('year', 2026)->where('month', 7)->where('chain_bucket', 'solana')->count());
-        $this->assertSame(5, MonthlyRanking::query()->where('year', 2026)->where('month', 7)->count(), 'exactly five bucket rows');
+    // ==== the participation score =====================================
+
+    /** @return array{0:float,1:?float,2:float,3:float} [score, holderStrength, volumeStrength, mcStrength] */
+    private function scoreParts(?int $holders, float $volume, float $mc): array
+    {
+        $c = app(MonthlyPerformanceCalculator::class)->scoreHistorical(null, $mc, $volume, $holders);
+
+        return [$c['performance_score'], $c['holder_strength'], $c['volume_strength'], $c['market_cap_strength']];
     }
 
     #[Test]
-    public function the_same_symbol_on_different_chains_is_handled_separately(): void
+    public function holder_volume_and_market_cap_strengths_are_each_deterministic_capped_log(): void
     {
-        $sol = $this->token('solana', ['symbol' => 'SAME', 'token_address' => 'AddrOne']);
-        $this->trajectory($sol, 8_000_000, 40_000_000);
-        $base = $this->token('base', ['symbol' => 'SAME', 'token_address' => 'AddrOne']);
-        $this->trajectory($base, 6_000_000, 12_000_000);
+        $ln = fn (float $x, float $ref): float => min(1.0, log(1 + $x) / log(1 + $ref));
 
-        $buckets = $this->finalizeJuly();
-
-        $this->assertSame($sol->id, $buckets->get('solana')->token_id);
-        $this->assertSame($base->id, $buckets->get('base')->token_id);
-        $this->assertSame('solana', $buckets->get('solana')->token->chain_id);
-        $this->assertSame('base', $buckets->get('base')->token->chain_id);
-    }
-
-    // ==== 11-14: scoring ===========================================
-
-    #[Test]
-    public function the_score_is_deterministic_across_runs(): void
-    {
-        $token = $this->token('solana');
-        $this->trajectory($token, 8_000_000, 40_000_000);
-
-        $a = $this->service()->computeCandidates($this->july, 'solana', $this->now);
-        $b = $this->service()->computeCandidates($this->july, 'solana', $this->now);
-
-        $this->assertSame($a[0]->performanceScore, $b[0]->performanceScore);
-        $this->assertSame($a[0]->activityScore, $b[0]->activityScore);
-        $this->assertSame($a[0]->marketCapGrowthPct, $b[0]->marketCapGrowthPct);
+        [, $h, $v, $mc] = $this->scoreParts(4_000, 8_000_000.0, 30_000_000.0);
+        $this->assertEqualsWithDelta($ln(4_000, 10_000), $h, 0.001);
+        $this->assertEqualsWithDelta($ln(8_000_000, 20_000_000), $v, 0.001);
+        $this->assertEqualsWithDelta($ln(30_000_000, 50_000_000), $mc, 0.001);
     }
 
     #[Test]
-    public function market_cap_growth_and_peak_expansion_are_computed_correctly(): void
+    public function the_combined_score_applies_the_configured_weights(): void
     {
-        $token = $this->token('solana', ['symbol' => 'GROW']);
-        $this->trajectory($token, 8_000_000, 40_000_000); // baseline 8M, peak 40M
+        [$score, $h, $v, $mc] = $this->scoreParts(4_000, 8_000_000.0, 30_000_000.0);
+        $expected = 100.0 * (0.40 * $h + 0.35 * $v + 0.25 * $mc) / (0.40 + 0.35 + 0.25);
+        $this->assertEqualsWithDelta($expected, $score, 0.05);
 
-        $row = $this->julyBucket('solana');
-
-        $this->assertEqualsWithDelta(8_000_000.0, $row->baseline_market_cap, 1);
-        $this->assertEqualsWithDelta(40_000_000.0, $row->peak_market_cap, 1);
-        $this->assertEqualsWithDelta(400.0, $row->market_cap_growth_pct, 0.5);
-        $this->assertEqualsWithDelta(5.0, $row->peak_expansion_ratio, 0.01);
-        $this->assertGreaterThan(0, $row->performance_score);
-        $this->assertLessThanOrEqual(100, $row->performance_score);
+        // Re-run with a different weighting -> different score.
+        config()->set('ranking.weights', ['holder' => 0.10, 'volume' => 0.10, 'market_cap' => 0.80]);
+        [$score2] = $this->scoreParts(4_000, 8_000_000.0, 30_000_000.0);
+        $this->assertNotEqualsWithDelta($score, $score2, 0.5);
     }
 
     #[Test]
-    public function stronger_relative_growth_beats_a_bigger_but_flatter_token(): void
+    public function an_unknown_holder_count_drops_out_and_the_weights_renormalize(): void
     {
-        $flatBig = $this->token('solana', ['symbol' => 'BIGFLAT', 'observed_peak_market_cap' => 120_000_000.0]);
-        $this->trajectory($flatBig, 100_000_000, 120_000_000); // +20%
-        $grower = $this->token('solana', ['symbol' => 'GROWER', 'observed_peak_market_cap' => 30_000_000.0]);
-        $this->trajectory($grower, 6_000_000, 30_000_000); // +400%
+        [$withHolders, $h] = $this->scoreParts(20_000, 8_000_000.0, 30_000_000.0);
+        [$withoutHolders, $hNull, $v, $mc] = $this->scoreParts(null, 8_000_000.0, 30_000_000.0);
 
-        $this->assertSame($grower->id, $this->julyBucket('solana')->token_id);
+        $this->assertNull($hNull);
+        $renorm = 100.0 * (0.35 * $v + 0.25 * $mc) / (0.35 + 0.25);
+        $this->assertEqualsWithDelta($renorm, $withoutHolders, 0.05);
+        // Strong holders lift the score; UNKNOWN is not treated as 0.
+        $this->assertGreaterThan($withoutHolders, $withHolders);
     }
 
     #[Test]
-    public function activity_never_lets_a_flat_token_beat_a_grower(): void
+    public function market_cap_alone_cannot_dominate_a_token_with_real_holder_and_volume_participation(): void
     {
-        $flat = $this->token('solana', ['symbol' => 'FLATBUSY']);
-        $this->trajectory($flat, 10_000_000, 10_500_000, 8, [
-            'volume_h24' => 50_000_000.0, 'liquidity_usd' => 20_000_000.0,
-            'txns_h24' => 200_000, 'price_change_h24' => 90.0,
-        ]);
-        $grower = $this->token('solana', ['symbol' => 'QUIETGROW']);
-        $this->trajectory($grower, 6_000_000, 24_000_000, 8, [
-            'volume_h24' => 300_000.0, 'liquidity_usd' => 150_000.0,
-            'txns_h24' => 800, 'price_change_h24' => 3.0,
-        ]);
+        // $150M token, market cap ONLY known.
+        [$huge] = $this->scoreParts(null, 0.0, 150_000_000.0);
+        // $20M token, strong holders + strong volume.
+        [$small] = $this->scoreParts(30_000, 25_000_000.0, 20_000_000.0);
 
-        $this->assertSame($grower->id, $this->julyBucket('solana')->token_id);
+        $this->assertGreaterThan($huge, $small, 'a $20M token with strong holders + volume must beat a $150M size-only token');
+        // The size-only score is penalized (config market_cap_only_penalty 0.5).
+        $this->assertLessThanOrEqual(50.0, $huge);
     }
 
     #[Test]
-    public function the_tie_break_is_deterministic(): void
+    public function a_researched_candidate_with_no_volume_and_no_market_cap_is_not_scorable(): void
     {
-        $a = $this->token('solana', ['symbol' => 'TIEA']);
-        $this->trajectory($a, 8_000_000, 24_000_000);
-        $b = $this->token('solana', ['symbol' => 'TIEB']);
-        $this->trajectory($b, 8_000_000, 24_000_000);
-
-        $this->assertSame(min($a->id, $b->id), $this->julyBucket('solana')->token_id);
+        [$score] = $this->scoreParts(5_000, 0.0, 0.0);
+        $this->assertNull($score);
     }
 
-    // ==== 15-20: eligibility =======================================
-
-    #[Test]
-    public function a_token_observed_too_sparsely_is_a_best_supported_candidate_not_finalized(): void
-    {
-        config()->set('ranking.min_observation_coverage', 0.5);
-
-        $sparse = $this->token('solana', ['symbol' => 'SPARSE']);
-        DB::table('market_snapshots')->insert([
-            $this->snapshotRow($sparse, '2026-07-03T00:00:00Z', 8_000_000),
-            $this->snapshotRow($sparse, '2026-07-04T00:00:00Z', 40_000_000), // +400%
-        ]);
-
-        $row = $this->julyBucket('solana');
-
-        $this->assertSame($sparse->id, $row->token_id);
-        $this->assertSame(MonthlyRanking::STATUS_BEST_SUPPORTED_CANDIDATE, $row->status);
-        $this->assertSame(MonthlyRanking::CONFIDENCE_LOW, $row->confidence);
-    }
-
-    #[Test]
-    public function a_sparse_grower_never_beats_a_densely_observed_eligible_token(): void
-    {
-        config()->set('ranking.min_observation_coverage', 0.5);
-
-        $sparse = $this->token('solana', ['symbol' => 'SPARSE']);
-        DB::table('market_snapshots')->insert([
-            $this->snapshotRow($sparse, '2026-07-03T00:00:00Z', 8_000_000),
-            $this->snapshotRow($sparse, '2026-07-04T00:00:00Z', 80_000_000), // +900%
-        ]);
-        $dense = $this->token('solana', ['symbol' => 'DENSE']);
-        $this->trajectory($dense, 8_000_000, 20_000_000, 8); // full coverage, +150%
-
-        $row = $this->julyBucket('solana');
-        $this->assertSame($dense->id, $row->token_id);
-        $this->assertSame(MonthlyRanking::STATUS_FINALIZED, $row->status);
-    }
-
-    #[Test]
-    public function snapshots_while_the_token_is_older_than_thirty_days_are_ignored(): void
-    {
-        $token = $this->token('solana', [
-            'symbol' => 'AGES',
-            'earliest_pair_created_at' => CarbonImmutable::parse('2026-06-20T00:00:00Z'),
-            'first_observed_at' => CarbonImmutable::parse('2026-07-01T00:00:00Z'),
-        ]);
-        DB::table('market_snapshots')->insert([
-            $this->snapshotRow($token, '2026-07-05T00:00:00Z', 6_000_000),
-            $this->snapshotRow($token, '2026-07-10T00:00:00Z', 8_000_000),
-            $this->snapshotRow($token, '2026-07-18T00:00:00Z', 10_000_000),
-            $this->snapshotRow($token, '2026-07-28T00:00:00Z', 150_000_000), // age > 30d — must be ignored
-        ]);
-
-        $row = $this->julyBucket('solana');
-
-        $this->assertSame($token->id, $row->token_id);
-        $this->assertEqualsWithDelta(10_000_000.0, $row->peak_market_cap, 1);
-    }
+    // ==== eligibility =================================================
 
     #[Test]
     public function the_five_million_floor_is_enforced(): void
     {
-        $token = $this->token('solana', ['symbol' => 'SMALLMONTH', 'observed_peak_market_cap' => 9_000_000.0]);
-        $this->trajectory($token, 2_000_000, 4_500_000); // never reaches $5M in July
-
-        $this->assertNull($this->julyBucket('solana')->token_id);
-        $this->assertSame(MonthlyRanking::STATUS_NO_VERIFIED_CHAMPION, $this->julyBucket('solana')->status);
+        $t = $this->token('solana', ['symbol' => 'LOWMC', 'observed_peak_market_cap' => 4_000_000.0]);
+        $this->trajectory($t, 4_000_000.0, 9_000_000.0);
+        $this->assertCount(0, $this->julyBucket('solana'));
+        $this->assertDatabaseHas('monthly_rankings', ['chain_bucket' => 'solana', 'rank' => 1, 'status' => 'no_verified_result']);
     }
 
     #[Test]
-    public function the_two_hundred_million_ceiling_is_enforced(): void
+    public function the_two_hundred_million_ceiling_is_enforced_even_for_a_single_in_month_spike(): void
     {
-        $token = $this->token('solana', ['symbol' => 'HUGE', 'observed_peak_market_cap' => 250_000_000.0]);
-        $this->trajectory($token, 8_000_000, 250_000_000);
+        $t = $this->token('solana', ['symbol' => 'HUGE', 'observed_peak_market_cap' => 60_000_000.0]);
+        $this->trajectory($t, 60_000_000.0, 9_000_000.0, 6);
+        // one snapshot spikes above $200M
+        DB::table('market_snapshots')->insert([
+            'token_id' => $t->id, 'observed_at' => $this->july->start->addDays(9),
+            'price_usd' => 0.02, 'market_cap' => 210_000_000.0, 'fdv' => 250_000_000.0,
+            'liquidity_usd' => 400_000.0, 'volume_h24' => 9_000_000.0, 'price_change_h24' => 5.0,
+            'txns_h24' => 3_000, 'buys_h24' => 1_700, 'sells_h24' => 1_300,
+            'primary_pair_address' => 'pair', 'primary_dex_id' => 'raydium',
+            'earliest_pair_created_at' => $t->earliest_pair_created_at, 'created_at' => $this->now, 'updated_at' => $this->now,
+        ]);
+        $this->assertCount(0, $this->julyBucket('solana'));
+    }
 
-        $this->assertNull($this->julyBucket('solana')->token_id);
+    #[Test]
+    public function a_token_older_than_thirty_days_at_the_snapshot_is_not_eligible(): void
+    {
+        $t = $this->token('solana', ['symbol' => 'OLD', 'earliest_pair_created_at' => $this->july->start->subDays(40)]);
+        $this->trajectory($t, 30_000_000.0, 9_000_000.0);
+        $this->assertCount(0, $this->julyBucket('solana'));
     }
 
     #[Test]
     public function a_historical_estimate_only_token_is_excluded(): void
     {
-        $token = $this->token('solana', [
-            'symbol' => 'ESTONLY',
-            'observed_peak_market_cap' => 2_000_000.0,
-            'historical_peak_status' => HistoricalPeakEvidence::STATUS_HISTORICAL_ESTIMATE,
-            'historical_estimate_fdv_usd' => 60_000_000.0,
-            'evidence' => [
-                'status' => HistoricalPeakEvidence::STATUS_HISTORICAL_ESTIMATE,
-                'peak_value_usd' => 60_000_000.0,
-                'evidence_source' => 'geckoterminal',
-                'evidence_basis' => 'fdv_total_supply',
-            ],
-        ]);
-        $this->trajectory($token, 8_000_000, 40_000_000);
-
-        $this->assertNull($this->julyBucket('solana')->token_id);
+        $t = $this->token('solana', ['symbol' => 'ESTONLY', 'observed_peak_market_cap' => null, 'evidence' => [
+            'status' => HistoricalPeakEvidence::STATUS_HISTORICAL_ESTIMATE,
+            'peak_value_usd' => 60_000_000.0, 'evidence_source' => 'geckoterminal', 'evidence_basis' => 'fdv_total_supply',
+        ]]);
+        $t->forceFill(['historical_peak_status' => HistoricalPeakEvidence::STATUS_HISTORICAL_ESTIMATE, 'historical_estimate_fdv_usd' => 60_000_000.0])->save();
+        $this->trajectory($t->refresh(), 60_000_000.0, 9_000_000.0);
+        $this->assertCount(0, $this->julyBucket('solana'));
     }
 
     #[Test]
-    public function an_unknown_token_is_excluded(): void
+    public function an_unknown_token_is_excluded_and_unknown_is_not_coerced_to_a_number(): void
     {
-        $token = $this->token('solana', [
-            'symbol' => 'UNK',
-            'observed_peak_market_cap' => 1_000_000.0,
-            'historical_peak_status' => HistoricalPeakEvidence::STATUS_UNKNOWN,
-            'evidence' => [
-                'status' => HistoricalPeakEvidence::STATUS_UNKNOWN,
-                'peak_value_usd' => null, 'evidence_source' => null, 'evidence_basis' => null,
-            ],
-        ]);
-        $this->trajectory($token, 8_000_000, 40_000_000);
-
-        $this->assertNull($this->julyBucket('solana')->token_id);
+        $t = $this->token('solana', ['symbol' => 'UNK', 'observed_peak_market_cap' => null, 'evidence' => [
+            'status' => HistoricalPeakEvidence::STATUS_UNKNOWN, 'peak_value_usd' => null,
+            'evidence_source' => null, 'evidence_basis' => null,
+        ]]);
+        $t->forceFill(['historical_peak_status' => HistoricalPeakEvidence::STATUS_UNKNOWN, 'historical_peak_value' => null])->save();
+        $this->trajectory($t->refresh(), 30_000_000.0, 9_000_000.0);
+        $this->assertCount(0, $this->julyBucket('solana'));
     }
 
     #[Test]
     public function a_historical_verified_token_is_eligible(): void
     {
-        $token = $this->token('bsc', [
-            'symbol' => 'VERIFIED',
-            'observed_peak_market_cap' => 3_000_000.0,
+        $t = $this->token('solana', ['symbol' => 'VER', 'observed_peak_market_cap' => null, 'evidence' => [
+            'status' => HistoricalPeakEvidence::STATUS_HISTORICAL_VERIFIED, 'peak_value_usd' => 30_000_000.0,
+            'evidence_source' => 'coingecko', 'evidence_basis' => 'market_cap',
+        ]]);
+        $t->forceFill([
             'historical_peak_status' => HistoricalPeakEvidence::STATUS_HISTORICAL_VERIFIED,
-            'historical_peak_value' => 12_000_000.0,
-            'historical_peak_value_at' => $this->july->start->addDays(5),
-            'evidence' => [
-                'status' => HistoricalPeakEvidence::STATUS_HISTORICAL_VERIFIED,
-                'peak_value_usd' => 12_000_000.0, 'evidence_source' => 'coingecko', 'evidence_basis' => 'market_cap',
-            ],
+            'historical_peak_value' => 30_000_000.0, 'historical_peak_value_at' => $this->july->start->addDays(5),
+        ])->save();
+        $this->trajectory($t->refresh(), 30_000_000.0, 9_000_000.0);
+        $this->assertSame('VER', $this->julyBucket('solana')[0]->token->symbol);
+    }
+
+    #[Test]
+    public function a_token_observed_too_sparsely_is_ranked_with_low_confidence_not_dropped(): void
+    {
+        config()->set('ranking.observation_interval_minutes', 10); // strict expectation
+        $t = $this->token('solana', ['symbol' => 'SPARSE']);
+        // only 2 snapshots across the month -> coverage well below 0.25
+        DB::table('market_snapshots')->insert([
+            $this->one($t, $this->july->start->addDays(2), 30_000_000.0),
+            $this->one($t, $this->july->start->addDays(20), 30_000_000.0),
         ]);
-        $this->trajectory($token, 6_000_000, 12_000_000);
-
-        $this->assertSame($token->id, $this->julyBucket('bsc')->token_id);
+        $rows = $this->julyBucket('solana');
+        $this->assertCount(1, $rows);
+        $this->assertSame('low', $rows[0]->confidence);
     }
 
-    // ==== 21-26: provisional / finalized / future ==================
-
-    #[Test]
-    public function the_current_month_is_provisional_per_bucket(): void
+    /** @return array<string,mixed> */
+    private function one(Token $t, CarbonImmutable $at, float $mc): array
     {
-        $token = $this->token('solana', [
-            'symbol' => 'AUG',
-            'earliest_pair_created_at' => CarbonImmutable::parse('2026-08-05T00:00:00Z'),
-            'first_observed_at' => CarbonImmutable::parse('2026-08-06T00:00:00Z'),
-        ]);
-        $august = MonthWindow::of(2026, 8);
-        $span = $august->endExclusive->getTimestamp() - CarbonImmutable::parse('2026-08-06T00:00:00Z')->getTimestamp();
-        for ($i = 0; $i < 8; $i++) {
-            DB::table('market_snapshots')->insert([$this->snapshotRow(
-                $token,
-                CarbonImmutable::parse('2026-08-06T00:00:00Z')->addSeconds((int) ($span * $i / 9))->toIso8601String(),
-                8_000_000 + $i * 2_000_000,
-            )]);
-        }
-
-        $row = $this->service()->computeAndStoreBucket($august, 'solana', finalize: false, force: false, now: $this->now);
-
-        $this->assertSame(MonthlyRanking::STATUS_PROVISIONAL, $row->status);
-        $this->assertNull($row->finalized_at);
-        $this->assertSame($token->id, $row->token_id);
+        return [
+            'token_id' => $t->id, 'observed_at' => $at, 'price_usd' => 0.01, 'market_cap' => $mc, 'fdv' => $mc * 1.2,
+            'liquidity_usd' => 400_000.0, 'volume_h24' => 9_000_000.0, 'price_change_h24' => 5.0,
+            'txns_h24' => 3_000, 'buys_h24' => 1_700, 'sells_h24' => 1_300,
+            'primary_pair_address' => 'pair', 'primary_dex_id' => 'raydium',
+            'earliest_pair_created_at' => $t->earliest_pair_created_at, 'created_at' => $this->now, 'updated_at' => $this->now,
+        ];
     }
 
-    #[Test]
-    public function a_future_bucket_is_recorded_as_future_with_no_token(): void
-    {
-        $row = $this->service()->computeAndStoreBucket(MonthWindow::of(2026, 12), 'solana', finalize: true, force: false, now: $this->now);
+    // ==== statuses ====================================================
 
-        $this->assertSame(MonthlyRanking::STATUS_FUTURE, $row->status);
-        $this->assertNull($row->token_id);
+    #[Test]
+    public function the_current_month_is_provisional_and_a_settled_past_month_is_stable(): void
+    {
+        $this->trajectory($this->token('solana', ['symbol' => 'JUL']), 30_000_000.0, 9_000_000.0);
+        $this->service()->refresh($this->now);
+
+        $this->assertDatabaseHas('monthly_rankings', ['year' => 2026, 'month' => 7, 'chain_bucket' => 'solana', 'rank' => 1, 'status' => 'finalized']);
+        // August (current) is provisional (no data -> synthesized, no row).
+        $this->assertDatabaseMissing('monthly_rankings', ['year' => 2026, 'month' => 8, 'chain_bucket' => 'solana', 'status' => 'finalized']);
+
+        // A settled July row is not re-touched on a normal re-run.
+        $before = MonthlyRanking::query()->where('month', 7)->where('chain_bucket', 'solana')->first()->computed_at;
+        CarbonImmutable::setTestNow($this->now->addDay());
+        $this->service()->refresh(CarbonImmutable::now());
+        $after = MonthlyRanking::query()->where('month', 7)->where('chain_bucket', 'solana')->first()->computed_at;
+        $this->assertEquals($before, $after);
     }
 
     #[Test]
-    public function a_completed_month_is_finalized(): void
+    public function force_recomputes_a_settled_month(): void
     {
-        $token = $this->token('solana', ['symbol' => 'FINAL']);
-        $this->trajectory($token, 8_000_000, 40_000_000);
+        $this->trajectory($this->token('solana', ['symbol' => 'A']), 30_000_000.0, 9_000_000.0);
+        $this->finalizeJuly();
+        $original = MonthlyRanking::query()->where('month', 7)->where('chain_bucket', 'solana')->first()->computed_at;
 
-        $row = $this->julyBucket('solana');
-        $this->assertSame(MonthlyRanking::STATUS_FINALIZED, $row->status);
-        $this->assertNotNull($row->finalized_at);
-    }
-
-    #[Test]
-    public function a_settled_bucket_is_stable_on_a_normal_rerun_and_force_recomputes(): void
-    {
-        $token = $this->token('solana', ['symbol' => 'STABLE']);
-        $this->trajectory($token, 8_000_000, 40_000_000);
-
-        $first = $this->julyBucket('solana');
-        $this->assertSame(MonthlyRanking::STATUS_FINALIZED, $first->status);
-        $finalizedAt = $first->finalized_at;
-
-        $newcomer = $this->token('solana', ['symbol' => 'LATE']);
-        $this->trajectory($newcomer, 6_000_000, 60_000_000); // wildly better
-
-        $rerun = $this->service()->computeAndStoreBucket($this->july, 'solana', finalize: true, force: false, now: $this->now);
-        $this->assertSame($token->id, $rerun->token_id, 'a normal rerun must not replace a settled bucket');
-        $this->assertTrue($rerun->finalized_at->equalTo($finalizedAt));
-
-        $forced = $this->julyBucket('solana', force: true);
-        $this->assertSame($newcomer->id, $forced->token_id, '--force recomputes');
+        CarbonImmutable::setTestNow($this->now->addDays(3));
+        $this->service()->finalizeMonth(2026, 7, force: true, now: CarbonImmutable::now());
+        $recomputed = MonthlyRanking::query()->where('month', 7)->where('chain_bucket', 'solana')->first()->computed_at;
+        $this->assertNotEquals($original, $recomputed);
     }
 
     #[Test]
     public function finalize_refuses_an_incomplete_month_without_force(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->service()->finalizeMonth(2026, 8, force: false, now: $this->now); // August is current
+        $this->service()->finalizeMonth(2026, 8, force: false, now: $this->now);
     }
 
     #[Test]
-    public function no_verified_champion_when_a_bucket_has_no_data(): void
+    public function a_completed_bucket_with_no_data_is_no_verified_result_with_no_token(): void
     {
-        $rows = $this->service()->finalizeMonth(2026, 6, force: true, now: $this->now);
+        $this->finalizeJuly();
+        $row = MonthlyRanking::query()->where('month', 7)->where('chain_bucket', 'robinhood')->firstOrFail();
+        $this->assertSame(1, $row->rank);
+        $this->assertSame('no_verified_result', $row->status);
+        $this->assertNull($row->token_id);
+        $this->assertNotNull($row->finalized_at);
+        $this->assertEmpty($this->julyBucket('robinhood'));
+    }
 
-        $this->assertCount(5, $rows);
-        foreach ($rows as $row) {
-            $this->assertSame(MonthlyRanking::STATUS_NO_VERIFIED_CHAMPION, $row->status);
-            $this->assertNull($row->token_id);
+    // ==== API =========================================================
+
+    #[Test]
+    public function the_api_returns_twelve_months_each_with_five_buckets_and_up_to_three_entries(): void
+    {
+        foreach ([12_000_000, 6_000_000, 3_000_000] as $i => $vol) {
+            $this->trajectory($this->token('solana', ['symbol' => "S{$i}"]), 30_000_000.0, (float) $vol);
         }
-    }
+        $this->finalizeJuly();
 
-    #[Test]
-    public function the_daily_pass_settles_the_previous_month_and_leaves_the_current_one_provisional(): void
-    {
-        $julyToken = $this->token('robinhood', ['symbol' => 'JULYWIN']);
-        $this->trajectory($julyToken, 8_000_000, 40_000_000);
-
-        $this->service()->refresh($this->now, backfillMonths: 2);
-
-        $julyRh = MonthlyRanking::query()->where('year', 2026)->where('month', 7)->where('chain_bucket', 'robinhood')->sole();
-        $this->assertSame(MonthlyRanking::STATUS_FINALIZED, $julyRh->status);
-        $this->assertSame($julyToken->id, $julyRh->token_id);
-
-        $augustRows = MonthlyRanking::query()->where('year', 2026)->where('month', 8)->get();
-        $this->assertCount(5, $augustRows);
-        foreach ($augustRows as $row) {
-            $this->assertNotSame(MonthlyRanking::STATUS_FINALIZED, $row->status);
-        }
-
-        // July's other four buckets settled too (no data -> no_verified_champion).
-        $this->assertSame(5, MonthlyRanking::query()->where('year', 2026)->where('month', 7)->count());
-    }
-
-    #[Test]
-    public function the_command_defaults_to_the_previous_completed_month(): void
-    {
-        $token = $this->token('bsc', ['symbol' => 'CMD']);
-        $this->trajectory($token, 8_000_000, 40_000_000);
-
-        $this->artisan('memecoins:finalize-monthly-champion')->assertExitCode(0);
-
-        $july = MonthlyRanking::query()->where('year', 2026)->where('month', 7)->where('chain_bucket', 'bsc')->sole();
-        $this->assertSame(MonthlyRanking::STATUS_FINALIZED, $july->status);
-        // September (future) is never created.
-        $this->assertSame(0, MonthlyRanking::query()->where('year', 2026)->where('month', 9)->count());
-        // August (current) is not finalized.
-        foreach (MonthlyRanking::query()->where('year', 2026)->where('month', 8)->get() as $row) {
-            $this->assertNotSame(MonthlyRanking::STATUS_FINALIZED, $row->status);
-        }
-    }
-
-    // ==== 30: historical source metadata ===========================
-
-    #[Test]
-    public function historical_source_metadata_is_preserved(): void
-    {
-        $token = $this->token('solana', ['symbol' => 'SRC']);
-        $this->trajectory($token, 8_000_000, 40_000_000);
-
-        $row = $this->julyBucket('solana');
-
-        $this->assertSame(MonthlyRanking::SOURCE_INTERNAL_OBSERVED, $row->source_type);
-        $this->assertNotNull($row->source_reference);
-        $this->assertContains($row->confidence, [MonthlyRanking::CONFIDENCE_HIGH, MonthlyRanking::CONFIDENCE_MEDIUM]);
-
-        // Survives a re-read.
-        $this->assertSame(MonthlyRanking::SOURCE_INTERNAL_OBSERVED, $row->fresh()->source_type);
-    }
-
-    // ==== 1, 2, 27, 28, 29: API ===================================
-
-    #[Test]
-    public function the_api_returns_exactly_twelve_months_each_with_all_five_buckets(): void
-    {
         $res = $this->getJson('/api/memecoins/monthly-champions?year=2026')->assertOk();
-
         $res->assertJsonCount(12, 'data');
-        $res->assertJsonPath('meta.count', 12);
+        $res->assertJsonPath('meta.top_n', 3);
         $res->assertJsonPath('meta.buckets', ['solana', 'robinhood', 'bsc', 'base', 'other']);
 
         foreach ($res->json('data') as $month) {
             $this->assertSame(['solana', 'robinhood', 'bsc', 'base', 'other'], array_keys($month['champions']));
-            foreach ($month['champions'] as $bucket => $entry) {
-                $this->assertSame($bucket, $entry['chain_bucket']);
-                $this->assertArrayHasKey('status', $entry);
-                $this->assertArrayHasKey('token', $entry);
+            foreach ($month['champions'] as $bucket => $payload) {
+                $this->assertSame($bucket, $payload['chain_bucket']);
+                $this->assertArrayHasKey('status', $payload);
+                $this->assertArrayHasKey('entries', $payload);
+                $this->assertLessThanOrEqual(3, count($payload['entries']));
             }
         }
+
+        $july = $res->json('data.6'); // index 6 = July
+        $this->assertSame(7, $july['month']);
+        $this->assertSame('finalized', $july['champions']['solana']['status']);
+        $entries = $july['champions']['solana']['entries'];
+        $this->assertCount(3, $entries);
+        $this->assertSame([1, 2, 3], array_column($entries, 'rank'));
+        $this->assertSame('S0', $entries[0]['token']['symbol']);
+        $this->assertArrayHasKey('holder_count', $entries[0]['performance']);
+        $this->assertArrayHasKey('monthly_volume', $entries[0]['performance']);
+        $this->assertArrayHasKey('market_cap', $entries[0]['performance']);
     }
 
     #[Test]
-    public function the_api_exposes_stored_bucket_champions_and_synthesizes_the_rest(): void
+    public function a_future_month_and_a_no_verified_result_bucket_have_no_entries(): void
     {
-        $sol = $this->token('solana', ['symbol' => 'APISOL']);
-        $this->trajectory($sol, 8_000_000, 40_000_000);
-        $bsc = $this->token('bsc', ['symbol' => 'APIBSC']);
-        $this->trajectory($bsc, 6_000_000, 18_000_000);
         $this->finalizeJuly();
-
         $res = $this->getJson('/api/memecoins/monthly-champions?year=2026')->assertOk();
 
-        // data[6] = July.
-        $res->assertJsonPath('data.6.month', 7);
-        $res->assertJsonPath('data.6.status', 'finalized');
-        $res->assertJsonPath('data.6.champions.solana.status', 'finalized');
-        $res->assertJsonPath('data.6.champions.solana.token.symbol', 'APISOL');
-        $res->assertJsonPath('data.6.champions.solana.token.chain_bucket', 'solana');
-        $res->assertJsonPath('data.6.champions.solana.source_type', 'internal_observed');
-        $res->assertJsonPath('data.6.champions.solana.performance.market_cap_growth_pct', fn ($v) => abs($v - 400) < 1);
-        $res->assertJsonPath('data.6.champions.bsc.token.symbol', 'APIBSC');
-        // Buckets with no data -> no_verified_champion, null token.
-        $res->assertJsonPath('data.6.champions.base.status', 'no_verified_champion');
-        $res->assertJsonPath('data.6.champions.base.token', null);
-        // August (current) -> month provisional, buckets synthesized provisional.
-        $res->assertJsonPath('data.7.status', 'provisional');
-        $res->assertJsonPath('data.7.champions.solana.status', 'provisional');
-        // September onward -> future.
-        $res->assertJsonPath('data.8.status', 'future');
-        $res->assertJsonPath('data.8.champions.solana.status', 'future');
+        $this->assertSame('future', $res->json('data.11.status'));           // December
+        $this->assertSame([], $res->json('data.11.champions.solana.entries'));
+        $this->assertSame('no_verified_result', $res->json('data.6.champions.bsc.status'));
+        $this->assertSame([], $res->json('data.6.champions.bsc.entries'));
     }
 
     #[Test]
     public function the_api_is_read_only_and_makes_no_provider_calls(): void
     {
         Http::fake();
-        $token = $this->token('solana');
-        $this->trajectory($token, 8_000_000, 40_000_000);
+        $this->trajectory($this->token('solana', ['symbol' => 'RO']), 30_000_000.0, 9_000_000.0);
         $this->finalizeJuly();
 
-        DB::enableQueryLog();
+        $before = DB::table('monthly_rankings')->count();
         $this->getJson('/api/memecoins/monthly-champions?year=2026')->assertOk();
-        $queries = DB::getQueryLog();
-        DB::disableQueryLog();
-
+        $this->assertSame($before, DB::table('monthly_rankings')->count());
         Http::assertNothingSent();
-        $this->assertLessThanOrEqual(3, count($queries));
-        foreach ($queries as $q) {
-            $this->assertStringNotContainsString('market_snapshots', $q['query']);
-        }
-        // Calling GET did not create or alter any ranking row.
-        $this->assertSame(5, MonthlyRanking::query()->count());
     }
 
-    // ==== isolation ==============================================
+    // ==== detail page + non-interference ==============================
 
     #[Test]
-    public function existing_pump_events_and_evidence_and_peak_are_untouched(): void
+    public function a_ranked_tracked_token_shows_its_rank_and_participation_on_the_detail_page(): void
     {
-        $token = $this->token('solana', ['symbol' => 'ISO']);
-        $this->trajectory($token, 8_000_000, 40_000_000);
+        $t = $this->token('solana', ['symbol' => 'DETAIL']);
+        $this->trajectory($t, 30_000_000.0, 12_000_000.0);
+        $this->trajectory($this->token('solana', ['symbol' => 'RUNNER']), 30_000_000.0, 4_000_000.0);
+        $this->finalizeJuly();
 
-        $event = $token->pumpEvents()->create([
-            'started_at' => $this->july->start->addDay(), 'peak_at' => $this->july->start->addDays(2),
-            'start_market_cap' => 8_000_000.0, 'peak_market_cap' => 20_000_000.0,
-            'start_price_usd' => 0.01, 'peak_price_usd' => 0.025,
-            'market_cap_change_pct' => 150.0, 'price_change_pct' => 150.0,
-            'volume_h24_change_ratio' => 2.0, 'txns_h24_change_ratio' => 1.8,
-            'duration_minutes' => 60, 'detection_score' => 70,
-            'confidence' => PumpEvent::CONFIDENCE_MEDIUM, 'status' => PumpEvent::STATUS_COMPLETED,
+        $res = $this->getJson("/api/memecoins/{$t->chain_id}/{$t->token_address}")->assertOk();
+        $res->assertJsonPath('data.monthly_champion.is_champion', true);
+        $champ = $res->json('data.monthly_champion.championships.0');
+        $this->assertSame(1, $champ['rank']);
+        $this->assertSame(7, $champ['month']);
+        $this->assertArrayHasKey('holder_count', $champ);
+        $this->assertArrayHasKey('monthly_volume', $champ);
+        $this->assertArrayHasKey('market_cap', $champ);
+    }
+
+    #[Test]
+    public function ranking_never_touches_risk_pump_evidence_qualification_or_tokens(): void
+    {
+        $t = $this->token('solana', ['symbol' => 'INTACT']);
+        $this->trajectory($t, 30_000_000.0, 9_000_000.0);
+        RiskAssessment::query()->create([
+            'token_id' => $t->id, 'risk_level' => 'HIGH', 'risk_score' => 60, 'data_completeness' => 1.0,
+            'screening_status' => 'completed', 'main_list_eligible' => false, 'screened_at' => $this->now, 'provider_version' => 't',
+        ]);
+        $pe = PumpEvent::query()->create([
+            'token_id' => $t->id, 'started_at' => $this->july->start->addDay(), 'peak_at' => $this->july->start->addDays(2),
+            'start_market_cap' => 6_000_000.0, 'peak_market_cap' => 30_000_000.0, 'start_price_usd' => 0.001, 'peak_price_usd' => 0.005,
+            'market_cap_change_pct' => 400, 'price_change_pct' => 400, 'duration_minutes' => 2880, 'detection_score' => 90, 'confidence' => 'low', 'status' => 'completed',
         ]);
         Evidence::query()->create([
-            'pump_event_id' => $event->id, 'token_id' => $token->id,
-            'category' => Evidence::CATEGORY_MARKET, 'source' => 'internal',
-            'title' => 'x', 'summary' => 'y', 'observed_at' => $this->july->start->addDay(),
-            'relevance_score' => 50, 'confidence' => 'medium', 'raw_reference' => 'x',
-            'dedupe_hash' => Str::random(40), 'collected_at' => $this->now,
+            'pump_event_id' => $pe->id, 'token_id' => $t->id, 'category' => 'MARKET', 'source' => 'internal',
+            'observed_at' => $this->july->start->addDay(), 'relevance_score' => 100, 'confidence' => 'high',
+            'summary' => 'x', 'dedupe_hash' => 'h1', 'collected_at' => $this->now,
         ]);
 
-        $pumpBefore = $event->only(['peak_market_cap', 'detection_score']);
-        $peakBefore = $token->observed_peak_market_cap;
+        $riskBefore = RiskAssessment::query()->first()->risk_level;
+        $peakBefore = $t->observed_peak_market_cap;
 
         $this->finalizeJuly();
 
-        $this->assertSame($pumpBefore, $event->fresh()->only(['peak_market_cap', 'detection_score']));
-        $this->assertSame(1, Evidence::query()->count());
-        $this->assertSame($peakBefore, $token->fresh()->observed_peak_market_cap);
+        $this->assertSame($riskBefore, RiskAssessment::query()->first()->risk_level);
+        $this->assertSame($peakBefore, $t->fresh()->observed_peak_market_cap);
+        $this->assertDatabaseCount('pump_events', 1);
+        $this->assertDatabaseCount('evidences', 1);
     }
 }

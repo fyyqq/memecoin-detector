@@ -79,12 +79,12 @@ class FinalizeMonthlyChampion extends Command
 
             $this->info('Monthly top-memecoins pass completed.');
             $this->newLine();
-            $this->line('Finalized:               '.$result->finalized);
-            $this->line('Provisional:             '.$result->provisional);
-            $this->line('Best-supported candidate:'.$result->bestSupportedCandidate);
-            $this->line('No verified champion:    '.$result->noVerifiedChampion);
-            $this->line('Skipped (settled):       '.$result->skippedSettled);
-            $this->line('Duration (s):            '.$result->durationSeconds);
+            $this->line('Finalized buckets:        '.$result->finalized);
+            $this->line('Provisional buckets:      '.$result->provisional);
+            $this->line('No verified result:       '.$result->noVerifiedChampion);
+            $this->line('Skipped (settled):        '.$result->skippedSettled);
+            $this->line('Ranked rows touched:      '.count($result->months));
+            $this->line('Duration (s):             '.$result->durationSeconds);
         } catch (Throwable $e) {
             $this->error('Monthly top-memecoins finalization failed: '.$e->getMessage());
             Log::error('Monthly top-memecoins finalization failed', ['error' => $e->getMessage()]);
@@ -115,15 +115,17 @@ class FinalizeMonthlyChampion extends Command
             }
 
             $this->line(sprintf(
-                '  %s %s  %s  +%d%% growth  peak %s  (%s / %s / %s)',
+                '  %s #%d %s  %s  score %s  holders %s  vol %s  mc %s  (%s / %s)',
                 $label,
+                (int) $ranking->rank,
                 $ranking->token?->symbol ?? '#'.$ranking->token_id,
                 $ranking->status,
-                round((float) $ranking->market_cap_growth_pct),
-                $this->money($ranking->peak_market_cap),
+                $ranking->performance_score !== null ? round((float) $ranking->performance_score, 1) : '—',
+                $ranking->holder_count !== null ? number_format((int) $ranking->holder_count) : 'UNKNOWN',
+                $this->money($ranking->monthly_volume_usd),
+                $this->money($ranking->month_market_cap),
                 $ranking->source_type ?? '—',
                 $ranking->confidence ?? '—',
-                round((float) $ranking->observation_coverage_ratio * 100).'% coverage',
             ));
         }
     }

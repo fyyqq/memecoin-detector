@@ -10,6 +10,7 @@ use App\Services\Ranking\Providers\InternalObservedMonthlyResearchProvider;
 use App\Services\Ranking\Providers\SeedFileMonthlyResearchProvider;
 use App\Services\Ranking\Providers\WebMonthlyResearchProvider;
 use Carbon\CarbonImmutable;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
@@ -113,9 +114,8 @@ class MonthlyChampionResearchService
                 ->where('year', $year)->where('month', $month)->where('chain_bucket', $bucket)->first();
 
             if ($window->isFuture($now)) {
-                $row = $this->champions->computeAndStoreBucket($window, $bucket, finalize: true, force: $force, now: $now);
+                $this->champions->computeAndStoreBucket($window, $bucket, finalize: true, force: $force, now: $now);
                 $counts['future']++;
-                $touched[] = $this->summary($row);
 
                 continue;
             }
@@ -130,16 +130,17 @@ class MonthlyChampionResearchService
             $progress && $progress($bucket, 'researching', null);
 
             $candidates = $this->gather($window, $bucket, $providerFailures);
-            $winner = $this->rank($this->validate($candidates, $window, $bucket));
-            $row = $this->persist($window, $bucket, $winner, count($candidates), $now);
+            $ranked = $this->rankTop3($this->validate($candidates, $window, $bucket));
+            $rows = $this->persistTop3($window, $bucket, $ranked, count($candidates), $now);
 
-            match ($row->status) {
+            match ($rows->first()?->status) {
                 MonthlyRanking::STATUS_FINALIZED => $counts['finalized']++,
-                MonthlyRanking::STATUS_BEST_SUPPORTED_CANDIDATE => $counts['best_supported']++,
                 default => $counts['no_verified']++,
             };
-            $touched[] = $this->summary($row);
-            $progress && $progress($bucket, 'done', $row);
+            foreach ($rows as $row) {
+                $touched[] = $this->summary($row);
+            }
+            $progress && $progress($bucket, 'done', $rows->first());
         }
 
         $result = new MonthlyChampionResearchRunResult(
@@ -247,17 +248,20 @@ class MonthlyChampionResearchService
                 }
             }
 
-            // Score.
+            // Score (participation formula — holder + volume + market cap).
             if (! $candidate->isInternalObserved()) {
                 $scored = $this->calculator->scoreHistorical(
                     $candidate->baselineMarketCap,
                     $candidate->peakMarketCap,
                     $candidate->volumeUsd,
+                    $candidate->holderCount,
                 );
                 $candidate->performanceScore = $scored['performance_score'];
+                $candidate->holderStrength = $scored['holder_strength'];
+                $candidate->volumeStrength = $scored['volume_strength'];
+                $candidate->marketCapStrength = $scored['market_cap_strength'];
                 $candidate->marketCapGrowthPct = $scored['market_cap_growth_pct'];
                 $candidate->peakExpansionRatio = $scored['peak_expansion_ratio'];
-                $candidate->activityScore = $scored['activity_score'];
             }
 
             $survivors[] = $candidate;
@@ -267,13 +271,14 @@ class MonthlyChampionResearchService
     }
 
     /**
+     * The ranked Top `config('ranking.top_n')` (3), deduped by token identity.
+     *
      * @param  list<MonthlyResearchCandidate>  $survivors
+     * @return list<MonthlyResearchCandidate>
      */
-    private function rank(array $survivors): ?MonthlyResearchCandidate
+    private function rankTop3(array $survivors): array
     {
-        if ($survivors === []) {
-            return null;
-        }
+        $n = max(1, (int) config('ranking.top_n', 3));
 
         usort($survivors, function (MonthlyResearchCandidate $a, MonthlyResearchCandidate $b): int {
             // 1. internal-observed evidence wins ties with external evidence.
@@ -282,7 +287,7 @@ class MonthlyChampionResearchService
             if ($ai !== $bi) {
                 return $bi <=> $ai;
             }
-            // 2. higher performance score (null last).
+            // 2. higher participation score (null last).
             $as = $a->performanceScore ?? -1.0;
             $bs = $b->performanceScore ?? -1.0;
             if ($as !== $bs) {
@@ -296,27 +301,53 @@ class MonthlyChampionResearchService
                 return $b->sourceCount() <=> $a->sourceCount();
             }
 
-            // 4. deterministic tie-break on symbol.
-            return strcmp(mb_strtolower($a->symbol), mb_strtolower($b->symbol));
+            // 4. deterministic tie-break on the token key.
+            return strcmp($a->tokenKey(), $b->tokenKey());
         });
 
-        return $survivors[0];
+        $picked = [];
+        $seen = [];
+        foreach ($survivors as $candidate) {
+            $key = $candidate->tokenKey();
+            if (isset($seen[$key])) {
+                continue;
+            }
+            $seen[$key] = true;
+            $picked[] = $candidate;
+            if (count($picked) >= $n) {
+                break;
+            }
+        }
+
+        return $picked;
     }
 
-    private function persist(MonthWindow $window, string $bucket, ?MonthlyResearchCandidate $winner, int $candidatesConsidered, CarbonImmutable $now): MonthlyRanking
+    /**
+     * Write up to `config('ranking.top_n')` ranked rows for a researched bucket
+     * (rank 1..N), delete any stale ranks, and record a single
+     * `no_verified_result` row when nothing survives.
+     *
+     * @param  list<MonthlyResearchCandidate>  $ranked
+     * @return Collection<int, MonthlyRanking>
+     */
+    private function persistTop3(MonthWindow $window, string $bucket, array $ranked, int $candidatesConsidered, CarbonImmutable $now): Collection
     {
-        /** @var MonthlyRanking $row */
-        $row = MonthlyRanking::query()->firstOrNew([
-            'year' => $window->year, 'month' => $window->month, 'chain_bucket' => $bucket,
-        ]);
-
-        if ($winner === null) {
+        if ($ranked === []) {
+            $this->deleteRanksFrom($window, $bucket, 2);
+            /** @var MonthlyRanking $row */
+            $row = MonthlyRanking::query()->firstOrNew([
+                'year' => $window->year, 'month' => $window->month, 'chain_bucket' => $bucket, 'rank' => 1,
+            ]);
             $row->fill([
                 'token_id' => null,
                 'champion_name' => null, 'champion_symbol' => null, 'champion_chain_id' => null,
                 'champion_token_address' => null, 'champion_image_url' => null,
-                'status' => MonthlyRanking::STATUS_NO_VERIFIED_CHAMPION,
-                'performance_score' => null, 'baseline_market_cap' => null, 'peak_market_cap' => null,
+                'status' => MonthlyRanking::STATUS_NO_VERIFIED_RESULT,
+                'performance_score' => null,
+                'holder_count' => null, 'monthly_volume_usd' => null, 'month_market_cap' => null,
+                'holder_strength' => null, 'volume_strength' => null, 'market_cap_strength' => null,
+                'holder_checked_at' => null,
+                'baseline_market_cap' => null, 'peak_market_cap' => null,
                 'market_cap_growth_pct' => null, 'peak_expansion_ratio' => null, 'activity_score' => null,
                 'observation_count' => null, 'observation_coverage_ratio' => null,
                 'scoring_breakdown' => ['candidates_considered' => $candidatesConsidered, 'method' => 'historical_research'],
@@ -326,44 +357,73 @@ class MonthlyChampionResearchService
             ]);
             $row->save();
 
-            return $row;
+            return collect([$row]);
         }
 
-        [$status, $confidence] = $this->classify($winner);
+        $written = collect();
+        foreach ($ranked as $index => $candidate) {
+            $rank = $index + 1;
+            [$status, $confidence] = $this->classify($candidate);
 
-        $row->fill([
-            'token_id' => $winner->tokenId,
-            'champion_name' => $winner->tokenId === null ? $winner->name : null,
-            'champion_symbol' => $winner->tokenId === null ? $winner->symbol : null,
-            'champion_chain_id' => $winner->tokenId === null ? $winner->chainId : null,
-            'champion_token_address' => $winner->tokenId === null ? $winner->tokenAddress : null,
-            'champion_image_url' => $winner->tokenId === null ? $winner->imageUrl : null,
-            'status' => $status,
-            'performance_score' => $winner->performanceScore,
-            'baseline_market_cap' => $winner->baselineMarketCap,
-            'peak_market_cap' => $winner->peakMarketCap,
-            'market_cap_growth_pct' => $winner->marketCapGrowthPct,
-            'peak_expansion_ratio' => $winner->peakExpansionRatio,
-            'activity_score' => $winner->activityScore,
-            'observation_count' => $winner->observationCount,
-            'observation_coverage_ratio' => $winner->observationCoverageRatio,
-            'scoring_breakdown' => [
-                'method' => $winner->isInternalObserved() ? 'internal_observed' : 'historical_research',
-                'candidates_considered' => $candidatesConsidered,
-                'explanation' => $winner->explanation,
-                'source_type' => $winner->sourceType,
-            ],
-            'source_type' => $winner->sourceType,
-            'source_reference' => $this->reference($winner),
-            'source_evidence' => $winner->isInternalObserved() ? null : $winner->sourcesAsArray(),
-            'age_uncertain' => $winner->ageUncertain,
-            'confidence' => $confidence,
-            'computed_at' => $now,
-            'finalized_at' => $now,
-        ]);
-        $row->save();
+            /** @var MonthlyRanking $row */
+            $row = MonthlyRanking::query()->firstOrNew([
+                'year' => $window->year, 'month' => $window->month, 'chain_bucket' => $bucket, 'rank' => $rank,
+            ]);
+            $row->fill([
+                'token_id' => $candidate->tokenId,
+                'champion_name' => $candidate->tokenId === null ? $candidate->name : null,
+                'champion_symbol' => $candidate->tokenId === null ? $candidate->symbol : null,
+                'champion_chain_id' => $candidate->tokenId === null ? $candidate->chainId : null,
+                'champion_token_address' => $candidate->tokenId === null ? $candidate->tokenAddress : null,
+                'champion_image_url' => $candidate->tokenId === null ? $candidate->imageUrl : null,
+                'status' => $status,
+                'performance_score' => $candidate->performanceScore,
+                'holder_count' => $candidate->holderCount,
+                'monthly_volume_usd' => $candidate->volumeUsd,
+                'month_market_cap' => $candidate->peakMarketCap,
+                'holder_strength' => $candidate->holderStrength,
+                'volume_strength' => $candidate->volumeStrength,
+                'market_cap_strength' => $candidate->marketCapStrength,
+                'holder_checked_at' => null,
+                'baseline_market_cap' => $candidate->baselineMarketCap,
+                'peak_market_cap' => $candidate->peakMarketCap,
+                'market_cap_growth_pct' => $candidate->marketCapGrowthPct,
+                'peak_expansion_ratio' => $candidate->peakExpansionRatio,
+                'activity_score' => $candidate->activityScore,
+                'observation_count' => $candidate->observationCount,
+                'observation_coverage_ratio' => $candidate->observationCoverageRatio,
+                'scoring_breakdown' => [
+                    'method' => $candidate->isInternalObserved() ? 'internal_observed' : 'historical_research',
+                    'candidates_considered' => $candidatesConsidered,
+                    'explanation' => $candidate->explanation,
+                    'source_type' => $candidate->sourceType,
+                    'holder_strength' => $candidate->holderStrength,
+                    'volume_strength' => $candidate->volumeStrength,
+                    'market_cap_strength' => $candidate->marketCapStrength,
+                ],
+                'source_type' => $candidate->sourceType,
+                'source_reference' => $this->reference($candidate),
+                'source_evidence' => $candidate->isInternalObserved() ? null : $candidate->sourcesAsArray(),
+                'age_uncertain' => $candidate->ageUncertain,
+                'confidence' => $confidence,
+                'computed_at' => $now,
+                'finalized_at' => $now,
+            ]);
+            $row->save();
+            $written->push($row);
+        }
 
-        return $row;
+        $this->deleteRanksFrom($window, $bucket, $written->count() + 1);
+
+        return $written;
+    }
+
+    private function deleteRanksFrom(MonthWindow $window, string $bucket, int $fromRank): void
+    {
+        MonthlyRanking::query()
+            ->where('year', $window->year)->where('month', $window->month)
+            ->where('chain_bucket', $bucket)->where('rank', '>=', $fromRank)
+            ->delete();
     }
 
     /**
@@ -382,7 +442,7 @@ class MonthlyChampionResearchService
                 ];
             }
 
-            return [MonthlyRanking::STATUS_BEST_SUPPORTED_CANDIDATE, MonthlyRanking::CONFIDENCE_LOW];
+            return [MonthlyRanking::STATUS_FINALIZED, MonthlyRanking::CONFIDENCE_LOW];
         }
 
         $peakInBand = $c->peakInBand(self::MIN_MC_USD, self::MAX_MC_USD);
@@ -414,10 +474,10 @@ class MonthlyChampionResearchService
                 ? $cap(MonthlyRanking::CONFIDENCE_MEDIUM)
                 : $cap(MonthlyRanking::CONFIDENCE_LOW);
 
-            return [MonthlyRanking::STATUS_BEST_SUPPORTED_CANDIDATE, $conf];
+            return [MonthlyRanking::STATUS_FINALIZED, $conf];
         }
 
-        return [MonthlyRanking::STATUS_NO_VERIFIED_CHAMPION, MonthlyRanking::CONFIDENCE_LOW];
+        return [MonthlyRanking::STATUS_NO_VERIFIED_RESULT, MonthlyRanking::CONFIDENCE_LOW];
     }
 
     private function minConfidence(string $a, string $b): string
