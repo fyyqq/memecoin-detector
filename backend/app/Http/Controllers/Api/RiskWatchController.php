@@ -58,7 +58,7 @@ class RiskWatchController extends Controller
         $qualified = Token::query()
             ->marketCapQualified($now)
             ->when($chain, fn ($q) => $q->where('chain_id', $chain))
-            ->with(['latestSnapshot', 'riskAssessment.signals'])
+            ->with(['latestSnapshot', 'riskAssessment.signals', 'latestTrending6h', 'latestTrending24h'])
             ->limit(500)
             ->get();
 
@@ -141,7 +141,38 @@ class RiskWatchController extends Controller
             'screened_at' => $assessment?->screened_at?->toIso8601String(),
             'reasons' => $decision->reasonLabels(),
             'failed_signals' => $failed,
+
+            // Trending Tracking — a token can be TRENDING and on RISK WATCH at
+            // the same time. Shown so a trending token that failed the risk
+            // screen stays visible with its rank / timeframe / last-trending
+            // time — never hidden.
+            'trend' => $this->trend($token),
+
             '_peak' => $peak,
+        ];
+    }
+
+    /**
+     * The token's latest "Tracked Trending" state (6h + 24h), or null. Reads the
+     * eager-loaded relations only.
+     *
+     * @return array<string,mixed>|null
+     */
+    private function trend(Token $token): ?array
+    {
+        $six = $token->relationLoaded('latestTrending6h') ? $token->latestTrending6h : null;
+        $day = $token->relationLoaded('latestTrending24h') ? $token->latestTrending24h : null;
+
+        if ($six === null && $day === null) {
+            return null;
+        }
+
+        return [
+            'tracked_trend_score_6h' => $six?->tracked_trend_score,
+            'trend_rank_6h' => $six?->trend_rank,
+            'tracked_trend_score_24h' => $day?->tracked_trend_score,
+            'trend_rank_24h' => $day?->trend_rank,
+            'last_trending_at' => ($six?->captured_at ?? $day?->captured_at)?->toIso8601String(),
         ];
     }
 }

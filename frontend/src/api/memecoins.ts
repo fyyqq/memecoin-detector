@@ -1,9 +1,14 @@
 import type {
+  ChainActivityResponse,
   MemecoinListResponse,
   MemecoinQuery,
   MonthlyChampionsResponse,
   RecentlyCrossedResponse,
   RiskWatchResponse,
+  Timeframe,
+  TopVolumeResponse,
+  TrendingHistoryResponse,
+  TrendingResponse,
 } from '../types/memecoin'
 
 const API_BASE_URL = (import.meta.env.VITE_API_URL ?? 'http://localhost:8010').replace(/\/$/, '')
@@ -84,6 +89,63 @@ export async function fetchRiskWatch(
   const url = `${API_BASE_URL}/api/memecoins/risk-watch${params.toString() ? `?${params}` : ''}`
 
   return getJson<RiskWatchResponse>(url, signal)
+}
+
+/**
+ * Fetch "Tracked Trending" for a timeframe (6h / 24h). Laravel-only,
+ * PostgreSQL-only — reads `trending_snapshots`, never DexScreener, never a
+ * WebSocket. This is our transparent internal ranking, NOT DexScreener's
+ * proprietary trendingScore.
+ */
+export async function fetchTrending(
+  timeframe: Timeframe,
+  chain?: string,
+  signal?: AbortSignal,
+): Promise<TrendingResponse> {
+  const params = new URLSearchParams({ timeframe })
+  if (chain) params.set('chain', chain)
+  return getJson<TrendingResponse>(`${API_BASE_URL}/api/memecoins/trending?${params}`, signal)
+}
+
+/**
+ * Fetch "Trending Yesterday" — reads `daily_trending_rankings` only. Never
+ * recomputes from current state, never calls a provider.
+ */
+export async function fetchTrendingHistory(
+  timeframe: Timeframe,
+  date?: string,
+  chain?: string,
+  signal?: AbortSignal,
+): Promise<TrendingHistoryResponse> {
+  const params = new URLSearchParams({ timeframe })
+  if (date) params.set('date', date)
+  if (chain) params.set('chain', chain)
+  return getJson<TrendingHistoryResponse>(
+    `${API_BASE_URL}/api/memecoins/trending/history?${params}`,
+    signal,
+  )
+}
+
+/**
+ * Fetch "Top 5 Volume by Chain" — REPORTED volume, integrity-gated. Not claimed
+ * organic. Laravel-only, PostgreSQL-only.
+ */
+export async function fetchTopVolume(
+  chain?: string,
+  signal?: AbortSignal,
+): Promise<TopVolumeResponse> {
+  const params = new URLSearchParams()
+  if (chain) params.set('chain', chain)
+  const url = `${API_BASE_URL}/api/memecoins/top-volume${params.toString() ? `?${params}` : ''}`
+  return getJson<TopVolumeResponse>(url, signal)
+}
+
+/**
+ * Fetch "Chain Market Activity" — reads `daily_chain_activity` only. Reported
+ * volume, deduplicated token-level representative-pair volume per bucket.
+ */
+export async function fetchChainActivity(signal?: AbortSignal): Promise<ChainActivityResponse> {
+  return getJson<ChainActivityResponse>(`${API_BASE_URL}/api/memecoins/chain-activity`, signal)
 }
 
 async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {

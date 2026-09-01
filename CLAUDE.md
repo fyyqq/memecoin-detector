@@ -102,7 +102,7 @@ memecoin-detector/
 │   │   ├── api/         memecoins.ts, memecoinDetail.ts (Laravel only)
 │   │   ├── types/       memecoin.ts, memecoinDetail.ts
 │   │   ├── lib/         format.ts ($74.6M / 8d / % / timestamps)
-│   │   ├── components/  MemecoinTable, ChainFilter, CopyAddress, MarketCapSparkline, RecentlyCrossedSection, TokenNarrativeSection, MonthlyChampions, RiskChip, RiskWatchSection
+│   │   ├── components/  MemecoinTable, ChainFilter, CopyAddress, MarketCapSparkline, RecentlyCrossedSection, TokenNarrativeSection, MonthlyChampions, RiskChip, RiskWatchSection, TrendingNow, TrendingHistory, ChainActivity, TopVolume
 │   │   ├── pages/       Dashboard.tsx, MemecoinDetail.tsx
 │   │   └── App.tsx      React Router: / and /memecoin/:chainId/:tokenAddress
 │   ├── vite.config.ts  host: true, port 5180
@@ -357,9 +357,10 @@ next sprint.
 
 `Token`, `MarketSnapshot`, `IngestionRun`, `HistoricalPeakEvidence`, `PumpEvent`,
 `Evidence`, `PumpExplanation`, `QualificationEvent`, `TokenNarrativeReport`,
-`TokenNarrativeSource`, `MonthlyRanking`, `RiskAssessment` and `RiskSignal` exist
-as tables. The rest are documented for naming consistency only — do **not**
-create them yet.
+`TokenNarrativeSource`, `MonthlyRanking`, `RiskAssessment`, `RiskSignal`,
+`TrendingSnapshot`, `DailyTrendingRanking` and `DailyChainActivity` exist as
+tables. The rest are documented for naming consistency only — do **not** create
+them yet.
 
 | Concept          | Meaning | Status |
 | ---------------- | ------- | ------ |
@@ -378,6 +379,9 @@ create them yet.
 | `TokenNarrativeSource` | One concise source behind a narrative report (Step 21) — `section` (`origin`/`popularity`), `source_type` (`official`/`news`/`social`/`market`/`community`/`reference`), `source_name`, `source_url`, `title`, `published_at` (real or **null**, never fabricated), `accessed_at`, `claim` (one sentence), `relevance_score`, `confidence` (quality tier), `provider`. Metadata + claim only — **never a scraped page body**. `unique(token_narrative_report_id, dedupe_hash)` → idempotent re-research. Persisted BEFORE the AI call. `belongsTo TokenNarrativeReport` + `belongsTo Token`. | **implemented (Step 21)** |
 | `RiskAssessment` | One CURRENT deterministic risk assessment per token (Step 24) — **unique on `token_id`**, upserted/re-evaluable. `risk_level` (`LOWER`/`MEDIUM`/`HIGH`/`CRITICAL`/`UNKNOWN` — `UNKNOWN` = "insufficient security data", NEVER "high" and NEVER "safe"), `risk_score` (deterministic 0–100, higher = more risk, **NOT** a probability of scam/rug/loss), `data_completeness` (measured/applicable signals), `screening_status` (`completed`/`partial`/`failed`), `hard_override_signal` (the single flag that forced the level, else null — never hidden), `main_list_eligible` (risk screen passed — **excludes** the live ≥72h maturity gate), `screened_at`, `provider_version`. No provider payloads. Written ONLY by `memecoins:screen-risk`; never a read API. Layers ON TOP of market-cap qualification — never changes qualification / `observed_peak_market_cap` / pump events / evidence. `belongsTo Token` / `Token hasOne`. See [docs/risk-screening.md](docs/risk-screening.md). | **implemented (Step 24)** |
 | `RiskSignal` | One structured risk signal behind a `RiskAssessment` (Step 24) — `signal_group` (`contract_security`/`exit_safety`/`holder_distribution`/`liquidity`/`pump_dump`/`market_structure`/`age`), `state` (**TRI-STATE** `MEASURED`/`BAD`/`UNKNOWN` + `NOT_AVAILABLE`), `value` / `numeric_value` / `unit`, `severity`, `source` (`goplus`/`geckoterminal`/`dexscreener`/`internal`), `source_checked_at`, `explanation` (**pre-written**, never LLM-generated). `unique(risk_assessment_id, signal_key)`; the full set is REPLACED on every rescan. `UNKNOWN` (null/`""`/missing/unsupported chain) and `NOT_AVAILABLE` (top-trader data — never obtainable) contribute **0** to the score and are never read as "no". No payloads. `belongsTo RiskAssessment` + `belongsTo Token`. | **implemented (Step 24)** |
+| `TrendingSnapshot` | One near-real-time capture of an **ELIGIBLE** trending memecoin in a timeframe (Trending Tracking) — `chain_id` / `token_address` / `pair_address` / `dex_id` / `symbol` / `name`, **`is_memecoin_candidate`** (`TRUE`/`UNKNOWN`/`FALSE` — only `TRUE` is stored), `timeframe` (`6h`/`24h`), `capture_bucket` (epoch seconds floored to `MEMECOIN_TREND_REFRESH_MINUTES`), `trend_rank` (dense 1..N among eligible), `tracked_trend_score` (transparent deterministic 0–100 INTERNAL score — **NOT** DexScreener's proprietary `trendingScoreH6/H24`; **market cap is not a component**), `trend_score_components` (json), `trend_appearances` (persistence input), `market_cap` (CURRENT) / `liquidity_usd` / `volume_usd` / `price_change_pct` / `transaction_count` / `pair_created_at` (the real `earliest_pair_created_at` when tracked), `trending_meta_slug` / `trending_meta_name`, `source` (always `dexscreener_meta`), `captured_at`. Only tokens passing the **Trending-Now eligibility** filter get a row: `is_memecoin_candidate == TRUE` AND age ≤ 30d (real `earliest_pair_created_at`; unknown → excluded) AND **CURRENT** `market_cap` in `[$5M, $200M]` AND volume > 0 AND liquidity > 0. **Unique on `(chain_id, token_address, timeframe, capture_bucket)`** → a re-run inside one 5-min bucket upserts, a new bucket appends. HISTORY — filtering never destroys it: a token that was eligible keeps every snapshot even after it stops trending / ages out / leaves the MC band; only `memecoins:cleanup-trending` prunes (> `MEMECOIN_TREND_SNAPSHOT_RETENTION_DAYS` 30). `token_id` links a tracked `Token` when one exists (nullable). Written ONLY by `memecoins:collect-trending`. This narrows "Trending Now" ONLY — never changes qualification / `observed_peak_market_cap` / `historical_peak_value` / `qualification_events` / risk logic. `belongsTo Token` / `Token hasMany` (+ `latestTrending6h` / `latestTrending24h`). See [docs/trending-tracking.md](docs/trending-tracking.md). | **implemented** |
+| `DailyTrendingRanking` | The daily trending archive — one row per `(date, chain_bucket, timeframe, token_address)` (**unique**). Upserted each `collect-trending` run: `best_rank` = MIN, `best_score` = MAX, `peak_market_cap` / `peak_volume` / `peak_liquidity` = MAX, `appearances += 1`, `first_seen_at` preserved, `last_seen_at` = now. `chain_bucket` = display bucket (token keeps real `chain_id`). This is what makes "Trending Yesterday" survive a token dropping out of trending. `GET /api/memecoins/trending/history` reads it ONLY — never recomputes. Pruned > `MEMECOIN_DAILY_TREND_RETENTION_DAYS` (365). `belongsTo Token`. | **implemented** |
+| `DailyChainActivity` | One materialised "Chain Market Activity" row per `(date, chain_bucket)` (**unique**) — `total_volume_usd` / `total_liquidity_usd` / `active_token_count` / `top_token_*` / `computed_at`. Recomputed every `collect-trending` run from `tokens` + each token's LATEST `market_snapshot` (deduplicated token-level representative-pair volume, behind `MarketIntegrityGate`). `total_volume_usd` is **REPORTED volume** — never claimed organic. `GET /api/memecoins/chain-activity` reads it ONLY + a day-over-day delta. | **implemented** |
 | `MonthlyRanking` | One "Monthly Top Memecoin" per calendar month **per chain bucket** (Step 22, corrected) — **unique on `(year, month, chain_bucket)`**, at most one champion per bucket → ≤ 12×5 = 60 rows/year. `chain_bucket` = one of the FIVE fixed buckets `solana` / `robinhood` / `bsc` / `base` / `other` (`ChainBucket::forChain(chain_id)`; the token keeps its real `chain_id`, only this column ever says `"other"`; **no** global monthly winner, **no** unlimited chain rows). `status` (`provisional` current / `finalized` past w/ eligible winner+evidence / `best_supported_candidate` past w/ a real but thinly-evidenced token / `no_verified_champion` past w/ no defensible winner, `token_id` null / `future`). `performance_score` (transparent 0–100, NOT a prediction), `baseline_market_cap` / `peak_market_cap` / `market_cap_growth_pct` / `peak_expansion_ratio` (from OBSERVED/VERIFIED month snapshots only — never FDV/estimate), `activity_score` (supporting, 15%), `observation_count` / `observation_coverage_ratio` (< `MEMECOIN_MONTHLY_MIN_OBSERVATION_COVERAGE` 0.25 → can't finalize), `scoring_breakdown` (json), **`source_type`** (`internal_observed` / `exact_dexscreener_rank` / `best_supported_historical_performer`) / **`source_reference`** / **`source_evidence`** (json — `[{name,url,claim,published_at,credibility}]`, Step 25) / **`age_uncertain`** (bool) / **`confidence`** (`high`/`medium`/`low`), plus **`champion_name`/`champion_symbol`/`champion_chain_id`/`champion_token_address`/`champion_image_url`** (Step 25 — a historically-researched champion NOT in our `tokens` table; `token_id` links a tracked `Token` only), `finalized_at`, `computed_at`. Champion of a bucket = the single eligible memecoin **in that bucket** with the strongest SUPPORTED performance by **market-cap growth** (baseline→peak) — NOT biggest / highest-cap / most-liquid / first-to-$5M. **Risk score and AI are NEVER used to select the winner** (also for historical). Eligibility = Step 19 universe (or, for historical, $5M–$200M **MARKET CAP** never FDV) + age ≤ 30d + month peak in `[$5M, $200M]` + volume/liquidity > 0 + belongs to the bucket. Written ONLY by `memecoins:finalize-monthly-champion` (daily, deterministic, internal only) + `memecoins:research-monthly-champions` (on-demand, Step 25 — historical backfill from operator-verified researched sources); a settled past row is immutable without `--force`; the GET API never recomputes and never researches. `belongsTo Token` / `Token hasMany`. See [docs/monthly-rankings.md](docs/monthly-rankings.md). | **implemented (Step 22 corrected · Step 25)** |
 
 ## Processing pipeline (concept)
@@ -452,6 +456,39 @@ In scope:
     everything else qualified goes to **RISK WATCH**
     (`GET /api/memecoins/risk-watch`) — visible, flagged, never hidden. RISK ≠
     SAFETY. No AI. Market-cap qualification is unchanged.
+11. **Near-real-time Trending Tracking** — the detector's **primary** concept:
+    "find what is TRENDING on DexScreener (6H / 24H), then aggressively filter it
+    for market quality and risk." Built ONLY on the documented
+    `GET /metas/trending/v1` → `GET /metas/meta/v1/{slug}` APIs (the undocumented
+    `io.dexscreener.com` WebSocket, HTML scraping and browser automation are NOT
+    used). **"Trending Now" shows ONLY the TOP N (default 10, max 20) of the
+    CURRENTLY-trending, NEWLY-LAUNCHED memecoins** — not every token in a trending
+    narrative. `memecoins:collect-trending` runs every ~5 min:
+    DEDUPE → **MEMECOIN FILTER** (`MemecoinClassifier` — `TRUE` only; `FALSE` =
+    stablecoin / wrapped / infra / blue-chip, `UNKNOWN` = ambiguous, both
+    excluded) → **CURRENT MARKET FILTER** (CURRENT `market_cap` in `[$5M, $200M]`
+    + liq > 0 + vol > 0) → enrich the small new-memecoin set → **AGE FILTER**
+    (real `earliest_pair_created_at` ≤ 30d; unknown → excluded) → score + rank
+    **ELIGIBLE only** per timeframe with the transparent deterministic
+    **`tracked_trend_score`** (momentum + volume + txns + liquidity + persistence;
+    **market cap is NOT a component**; NEVER presented as DexScreener's
+    proprietary score) → UPSERT `trending_snapshots` (ELIGIBLE only, ≤
+    `MEMECOIN_TREND_MAX_CANDIDATES` 60/timeframe; HISTORY — filtering never
+    destroys a stored snapshot) + `daily_trending_rankings` ("Trending
+    Yesterday") + `daily_chain_activity`. Three separate concepts: **CURRENT
+    TRENDING** (latest capture, top N) vs **TRENDING HISTORY**
+    (`daily_trending_rankings`, retained forever within retention) vs **MAIN
+    LIST** (observed/verified PEAK qualification + risk screen). A token can be
+    MAIN LIST but not trending; Trending but on RISK WATCH; a POKEGYM-style 2h-old
+    token can rank #1 in Trending Now yet `main_list_eligible = false`. This
+    narrows the homepage view ONLY — never changes qualification /
+    `observed_peak_market_cap` / `historical_peak_value` / `qualification_events` /
+    risk logic. Read APIs `GET /api/memecoins/trending` (`meta.top_n` +
+    `meta.filters`, `rank` renumbered 1..N) / `/trending/history` / `/top-volume`
+    / `/chain-activity` are PostgreSQL-only, no pagination. Volume is always
+    **"Reported Volume"**, never claimed organic. `memecoins:cleanup-trending`
+    (daily) prunes by retention. No AI.
+    See [docs/trending-tracking.md](docs/trending-tracking.md).
 
 Same pipeline runs two ways — HTTP `GET /api/memecoins/discover` (`trigger=manual`)
 and the scheduled command `php artisan memecoins:discover` (`trigger=scheduled`,
@@ -617,9 +654,26 @@ Explicitly **excluded** from Sprint 1:
   all-null / empty when no crossing recorded), `provenance`. **Dashboard
   qualification is NOT an existence gate** — any stored `Token` resolves. Miss →
   `404 {"error": "Memecoin not found."}`. ≤ 8 queries, no N+1.
-- **React dashboard** reads `GET /api/memecoins` + `GET /api/memecoins/recently-crossed`
-  + `GET /api/memecoins/monthly-champions` + `GET /api/memecoins/risk-watch` only.
-  **Sections**: **🏆 Monthly Chain Champions** (Step 22 corrected · Step 25 —
+- **React dashboard** reads `GET /api/memecoins` + `/recently-crossed` +
+  `/monthly-champions` + `/risk-watch` + `/trending` + `/trending/history` +
+  `/top-volume` + `/chain-activity` only (all this app's API — never DexScreener /
+  a provider / a WebSocket). Homepage order: **🔥 Top Trending Memecoins**
+  (the TOP 10, max 20 — tabs `[6H]/[24H]` + chain filter; `#` renumbered 1..N /
+  token / chain / **Age** / MC / volume / liquidity / trend score / risk chip;
+  "Updated ~N minutes ago"; intro states the filters — memecoin, age ≤ 30d,
+  current MC $5M–$200M, volume & liquidity > 0; a `main list` tag when the token
+  passes qualification + the risk screen; "RISK CHECK STALE" when the scan is
+  old; rows link to the detail page only when the token is tracked) →
+  **🔥 Recently Crossed $5M** → **🟢 Main Memecoin List**
+  (now with a **Trend** column) → **⚠️ Risk Watch** (rows carry a `trend` block) →
+  **📊 Chain Market Activity** (5 attractive cards — 24H Reported Volume /
+  Liquidity / Active Tokens / Top Volume token / Δ vs previous day) → **💧 Top
+  Volume by Chain** (per-bucket top-5 by Reported Volume, integrity-gated) →
+  **🏆 Monthly Chain Champions** → **📜 Yesterday's Trending** (reads
+  `daily_trending_rankings` only — historical observations, not recomputed).
+  Never says "real/organic volume", "DexScreener Trending Score" or "safe".
+  Older sections unchanged:
+  **🏆 Monthly Chain Champions** (Step 22 corrected · Step 25 —
   calendar 3×4 grid, 2 cols tablet / 1 col mobile; each month card lists the FIVE
   chain buckets Solana/Robinhood/BSC/Base/Other, each `🥇 $SYMBOL` + "+X% MC
   growth" or a status label `Finalized`/`Best-supported`/`No verified champion`/
@@ -901,8 +955,73 @@ Explicitly **excluded** from Sprint 1:
   RISK · CRITICAL — AVOID · RISK UNKNOWN · DISQUALIFIED. `config/risk.php`.
   Docs: [docs/risk-screening.md](docs/risk-screening.md) +
   [docs/memecoin-risk-reconnaissance.md](docs/memecoin-risk-reconnaissance.md).
+- **Near-real-time Trending Tracking** — `php artisan memecoins:collect-trending`,
+  scheduled `*/MEMECOIN_TREND_REFRESH_MINUTES` (default `*/5`,
+  `withoutOverlapping(10)`; reuses the `scheduler` container). `TrendingMetaCollector`
+  fetches the **documented** `GET /metas/trending/v1` → `GET /metas/meta/v1/{slug}`
+  (18 metas, 60s cache, ~19 calls on the 60/min bucket), dedupes to one
+  representative pair per `(chain, token)`. Then the **Trending-Now eligibility
+  pipeline** (cheap filters first): `MemecoinClassifier` (deterministic,
+  config-driven `memecoin.*` lists — deny stablecoin / wrapped / infra /
+  blue-chip / LST symbols + name patterns; TRUE on a meme-narrative meta slug or
+  a meme keyword; `UNKNOWN` = ambiguous → excluded) → **CURRENT market filter**
+  (`market_cap` in `[MEMECOIN_OBSERVED_PEAK_MIN_USD, MAX]` on the CURRENT value,
+  liq > 0, vol > 0) → enrich the small NEW-memecoin set (bounded `/token-pairs/v1`,
+  ≤ `MEMECOIN_TREND_MAX_NEW_TOKEN_ENRICH` 40/run) → **strict AGE filter** (real
+  `Token.earliest_pair_created_at` ≤ `MEMECOIN_MAX_AGE_DAYS` 30; unknown →
+  excluded). Only the **ELIGIBLE** set is scored by `TrackedTrendScorer`
+  (`config/trending.php`, no AI) for **6h + 24h**: `score = 100·Σ weight·component`
+  over momentum / volume_activity / transaction_activity / liquidity_quality /
+  persistence — **market cap is NOT a component**, a missing metric →
+  `unavailable_component` (0.25). Ranked per timeframe → `trend_rank` (dense 1..N
+  among eligible). `TrendingSnapshotRecorder` upserts `trending_snapshots`
+  (ELIGIBLE only, ≤ `MEMECOIN_TREND_MAX_CANDIDATES` 60/timeframe, `is_memecoin_candidate`
+  stored) on `(chain_id, token_address, timeframe, capture_bucket)` (5-min
+  buckets — HISTORY, a re-run in one bucket refreshes, a new bucket appends;
+  filtering NEVER deletes a stored snapshot); `DailyTrendingRollup` upserts the
+  `daily_trending_rankings` archive (`best_rank` MIN / `best_score` MAX / `peak_*`
+  MAX / `appearances++`); `ChainActivityRollup` recomputes
+  `daily_chain_activity` (deduplicated token-level representative-pair volume per
+  chain bucket, behind `MarketIntegrityGate`). It does **NOT** run historical
+  qualification or risk screening. `DexScreenerDiscoveryService::prioritizeCandidates()`
+  now folds recent `trend_rank` / `trend_appearances` in ABOVE profile/boost.
+  `tracked_trend_score` is our transparent INTERNAL ranking — it is **NEVER**
+  presented as DexScreener's proprietary `trendingScoreH6/H24` (undocumented,
+  Cloudflare-bot-walled binary WebSocket — see
+  [docs/trending-discovery-reconnaissance.md](docs/trending-discovery-reconnaissance.md)).
+  UI wording: **"Top Trending Memecoins"** (never "All Trending Tokens"),
+  "Tracked Trending", "Updated ~5 minutes ago", "Reported Volume", "RISK CHECK
+  STALE" — never "real/organic volume", never "DexScreener Trending Score", never
+  "safe".
+  `memecoins:cleanup-trending` (daily `00:40`) prunes `trending_snapshots` >
+  `MEMECOIN_TREND_SNAPSHOT_RETENTION_DAYS` (30) and the daily rollups >
+  `MEMECOIN_DAILY_TREND_RETENTION_DAYS` (365). `config/trending.php`. Docs:
+  [docs/trending-tracking.md](docs/trending-tracking.md).
+- **Read APIs `GET /api/memecoins/trending` / `/trending/history` / `/top-volume`
+  / `/chain-activity`** — all PostgreSQL-only, never call DexScreener / GoPlus / a
+  provider, never open a WebSocket, never recompute, never write.
+  `/trending?timeframe=6h|24h&chain=&limit=` returns the **TOP N** of the latest
+  capture (default `MEMECOIN_TREND_TOP_N` 10, max `MEMECOIN_TREND_TOP_MAX` 20 —
+  `limit` above the max → 422; no pagination), re-checks the eligibility filters
+  at read time, renumbers `rank` 1..N within the (chain-filtered) view, and adds
+  `meta.top_n` + `meta.filters` (`memecoin_only` / `max_age_days` /
+  `min_current_market_cap` / `max_current_market_cap` / `volume_required` /
+  `liquidity_required`); joins `risk_assessments` (level + `risk_checked_at` +
+  `risk_check_stale` when older than the 6h scan cooldown) + `main_list_eligible`.
+  The chain filter narrows the already-eligible universe.
+  `/trending/history?date=&timeframe=&chain=` reads `daily_trending_rankings` only
+  (default date = yesterday; may return MORE rows than Trending Now — it is the
+  archive, not the top N). `/top-volume?chain=` = top 5 per chain bucket by
+  REPORTED `volume_h24` after the market-integrity gate (always all 5 buckets).
+  `/chain-activity` = per-bucket totals from `daily_chain_activity` + a
+  day-over-day `volume_change_pct` (null with no prior row). `GET /api/memecoins`
+  + `/risk-watch` rows gain a `trend` block (latest `tracked_trend_score_6h/_24h`
+  + ranks). Homepage order: **🔥 Top Trending Memecoins → 🔥 Recently Crossed $5M → 🟢 Main
+  Memecoin List → ⚠️ Risk Watch → 📊 Chain Market Activity → 💧 Top Volume by
+  Chain → 🏆 Monthly Chain Champions → 📜 Yesterday's Trending**.
 - Tables: `tokens`, `market_snapshots`, `ingestion_runs`,
   `historical_peak_evidences`, `pump_events`, `evidences`, `pump_explanations`,
   `qualification_events`, `token_narrative_reports`, `token_narrative_sources`,
-  `monthly_rankings`, `risk_assessments`, `risk_signals`. No queue / trend score
-  / related-token graph / auth.
+  `monthly_rankings`, `risk_assessments`, `risk_signals`, `trending_snapshots`,
+  `daily_trending_rankings`, `daily_chain_activity`. No queue / related-token
+  graph / auth.

@@ -38,6 +38,41 @@ Schedule::command('memecoins:discover --trigger=scheduled')
     ->description('DexScreener memecoin discovery + snapshot ingestion');
 
 /*
+| Near-real-time Trending Tracking.
+|
+| Every MEMECOIN_TREND_REFRESH_MINUTES (default 5) the collector fetches the
+| documented DexScreener trending-meta APIs, scores + ranks 6h and 24h with the
+| transparent internal `tracked_trend_score` (NOT DexScreener's proprietary
+| score), writes persistent `trending_snapshots` + the `daily_trending_rankings`
+| archive, enriches brand-new trending tokens into Token + MarketSnapshot, and
+| recomputes `daily_chain_activity`.
+|
+| It does NOT run risk screening (that stays on its 6h cooldown) and it never
+| touches the undocumented io.dexscreener.com WebSocket. withoutOverlapping so a
+| slow run is never doubled up. "Near real-time" / "Updated every ~5 minutes" —
+| not tick-level real-time.
+*/
+$trendInterval = (int) config('trending.refresh_minutes', 5);
+
+Schedule::command('memecoins:collect-trending')
+    ->cron("*/{$trendInterval} * * * *")
+    ->withoutOverlapping(10)
+    ->sendOutputTo($scheduledCommandOutput)
+    ->description('Near-real-time DexScreener trending collection (6h + 24h) into persistent snapshots');
+
+/*
+| Trending retention cleanup — prunes `trending_snapshots` past
+| MEMECOIN_TREND_SNAPSHOT_RETENTION_DAYS (30) and the daily rollups past
+| MEMECOIN_DAILY_TREND_RETENTION_DAYS (365). Runs once daily at a quiet hour;
+| NEVER on an API request.
+*/
+Schedule::command('memecoins:cleanup-trending')
+    ->dailyAt('00:40')
+    ->withoutOverlapping(30)
+    ->sendOutputTo($scheduledCommandOutput)
+    ->description('Prune trending snapshots + daily rollups past their retention windows');
+
+/*
 | Pump event detection (Step 16A).
 |
 | Deterministic detection over the stored observation series — no external

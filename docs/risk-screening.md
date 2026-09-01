@@ -284,6 +284,21 @@ value, its source, its `checked_at`, and whether it was measured or unavailable.
 Risk is point-in-time (`screened_at`); a contract can be re-proxied or
 un-renounced after a scan.
 
+### Trending ↔ risk separation
+
+Trending Tracking ([trending-tracking.md](trending-tracking.md)) never touches
+risk. A trending token still has to pass market-cap qualification **and** this
+risk screen to reach the MAIN LIST — otherwise it goes to RISK WATCH, where it
+stays visible with its risk level, failed checks, trend rank, timeframe and
+last-trending time. A token can be **TRENDING + RISK WATCH** at the same time;
+trending is attention, not safety.
+
+`memecoins:collect-trending` does **not** refresh a risk scan (it keeps the
+`MEMECOIN_RISK_SCAN_COOLDOWN_HOURS` = 6h cooldown), so a trending token's scan
+can be stale. `GET /api/memecoins/trending` and `/top-volume` return
+`risk_checked_at` + `risk_check_stale`; the UI shows **"RISK CHECK STALE"** and
+never silently treats a stale (or absent) scan as safe.
+
 ## 15. Limitations
 
 1. **Top-trader flow is permanently unavailable** for free — no wallet-level

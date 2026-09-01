@@ -58,4 +58,17 @@ final class ChainBucket
     {
         return in_array($bucket, self::ALL, true);
     }
+
+    /** Human display label for a bucket. */
+    public static function label(string $bucket): string
+    {
+        return match ($bucket) {
+            self::SOLANA => 'Solana',
+            self::ROBINHOOD => 'Robinhood',
+            self::BSC => 'BSC',
+            self::BASE => 'Base',
+            self::OTHER => 'Other',
+            default => ucfirst($bucket),
+        };
+    }
 }

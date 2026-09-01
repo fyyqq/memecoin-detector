@@ -61,7 +61,14 @@ class MemecoinListController extends Controller
         $qualified = Token::query()
             ->marketCapQualified($now)
             ->when($chain, fn ($q) => $q->where('chain_id', $chain))
-            ->with(['latestSnapshot', 'historicalPeakEvidence', 'qualificationEvents', 'riskAssessment.signals'])
+            ->with([
+                'latestSnapshot',
+                'historicalPeakEvidence',
+                'qualificationEvents',
+                'riskAssessment.signals',
+                'latestTrending6h',
+                'latestTrending24h',
+            ])
             ->limit(500)
             ->get();
 

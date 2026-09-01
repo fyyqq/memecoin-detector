@@ -470,6 +470,58 @@ scheduler container: php artisan schedule:work
   scheduled command's stdout is redirected to the container's PID 1 stdout
   (`/proc/1/fd/1`); off-container it falls back to `storage/logs/schedule.log`.
 
+### Near-real-time Trending Tracking (primary concept)
+
+`memecoins:collect-trending` — scheduled `*/MEMECOIN_TREND_REFRESH_MINUTES`
+(default `*/5`, `withoutOverlapping(10)`) — is now the detector's primary loop:
+
+**"Trending Now" shows ONLY the TOP N (default 10, max 20) of the CURRENTLY-
+trending, NEWLY-LAUNCHED memecoins** — not every token in a trending narrative.
+
+```
+   */5 * * * *  ──▶ php artisan memecoins:collect-trending
+                        │
+   GET /metas/trending/v1 → GET /metas/meta/v1/{slug}   (~400 tokens, documented APIs, 60s cache)
+                        │  DEDUPE (one representative pair per chain+token)
+                        ▼
+   MEMECOIN FILTER        MemecoinClassifier -> TRUE only  (FALSE / UNKNOWN excluded)
+                        ▼
+   CURRENT MARKET FILTER  CURRENT market_cap in [$5M, $200M]  AND liquidity > 0  AND volume > 0
+                        ▼
+   enrich the small NEW-memecoin set -> Token + MarketSnapshot   (only to establish a real earliest_pair_created_at)
+                        ▼
+   AGE FILTER <= 30d      on the REAL earliest_pair_created_at; age UNKNOWN -> excluded (do not guess)
+                        ▼
+   TrackedTrendScorer: score ELIGIBLE only, per timeframe (6h / 24h)  (deterministic, no AI, MC NOT an input)
+                        │  rank per timeframe -> trend_rank (dense 1..N among eligible)
+                        ▼
+   UPSERT trending_snapshots        (ELIGIBLE only, capped 60/tf — HISTORY, filtering never deletes a stored row)
+   UPSERT daily_trending_rankings   ("Trending Yesterday" archive — best_rank MIN / peak_* MAX / appearances++)
+   recompute daily_chain_activity   (deduplicated token-level representative-pair volume per bucket)
+```
+
+`GET /api/memecoins/trending?timeframe=6h|24h` returns the **TOP N** (`meta.top_n`
+10, max 20; no pagination) with `meta.filters` and `rank` renumbered 1..N.
+
+**Three separate concepts:** **CURRENT TRENDING** (latest capture, top N) vs
+**TRENDING HISTORY** (`daily_trending_rankings` — a token stays after it stops
+being eligible) vs **MAIN LIST** (observed/verified PEAK qualification + risk
+screen). It does **NOT** run historical qualification or risk screening. Trending
+NEVER changes `observed_peak_market_cap` / `historical_peak_value` /
+`qualification_events` / risk logic — the correction narrows the homepage view
+ONLY. A token can be MAIN LIST but not trending; Trending but on RISK WATCH; a
+POKEGYM-style 2h token can rank #1 yet `main_list_eligible = false`.
+`tracked_trend_score` is our transparent INTERNAL ranking — NOT DexScreener's
+proprietary `trendingScoreH6/H24` (undocumented, Cloudflare-bot-walled binary
+WebSocket — see [trending-discovery-reconnaissance.md](trending-discovery-reconnaissance.md)).
+`memecoins:cleanup-trending` (daily `00:40`) prunes by retention. Full design:
+[trending-tracking.md](trending-tracking.md).
+
+`DexScreenerDiscoveryService::prioritizeCandidates()` now folds recent
+`trend_rank` / `trend_appearances` (from the latest `trending_snapshots` capture)
+in ABOVE the profile / boost / keyword signals — market cap still never a
+prioritization signal.
+
 ### Manual / debug scheduler commands
 
 The scheduler container makes these unnecessary for normal use, but they help
@@ -481,6 +533,8 @@ docker compose exec scheduler php artisan schedule:list       # what's registere
 docker compose exec scheduler php artisan schedule:clear-cache  # release a stuck withoutOverlapping mutex
 docker compose exec backend php artisan memecoins:discover    # run one ingestion by hand (trigger=scheduled)
 docker compose exec backend php artisan memecoins:discover --trigger=manual
+docker compose exec backend php artisan memecoins:collect-trending      # one trending capture by hand
+docker compose exec backend php artisan memecoins:cleanup-trending --dry-run
 ```
 
 ---
