@@ -42,7 +42,7 @@ class ScreenRisk extends Command
         $this->newLine();
         $this->line('Tokens analyzed:    '.$result->tokensAnalyzed);
         $this->line('Main-list eligible: '.$result->mainListEligible);
-        $this->line('Risk watch:         '.$result->riskWatch);
+        $this->line('Not main-list:      '.$result->notMainListEligible);
         $this->line('Lower risk:         '.$result->lower);
         $this->line('Medium risk:        '.$result->medium);
         $this->line('High risk:          '.$result->high);

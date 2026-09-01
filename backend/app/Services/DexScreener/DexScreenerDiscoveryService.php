@@ -9,7 +9,6 @@ use App\DTOs\DexScreener\TokenCandidateData;
 use App\Models\HistoricalPeakEvidence;
 use App\Models\IngestionRun;
 use App\Models\Token;
-use App\Models\TrendingSnapshot;
 use App\Services\Historical\HistoricalQualificationService;
 use App\Services\Historical\QualificationEventRecorder;
 use Carbon\CarbonImmutable;
@@ -231,10 +230,8 @@ class DexScreenerDiscoveryService
         ];
 
         // 1b. PRIORITIZE (deterministic) → CANDIDATE CAP → ENRICHMENT CAP.
-        // Market cap is NOT a prioritization signal. Recent trend rank /
-        // appearances (from the near-real-time trending collector) rank a
-        // candidate ABOVE profile / boost / keyword.
-        $ordered = $this->prioritizeCandidates($candidates, $this->recentTrendSignals(array_keys($candidates)));
+        // Market cap is NOT a prioritization signal.
+        $ordered = $this->prioritizeCandidates($candidates);
 
         $diagnostics['candidate_cap_dropped'] = max(0, count($ordered) - $candidateCap);
         $considered = array_slice($ordered, 0, max(1, $candidateCap));
@@ -722,26 +719,22 @@ class DexScreenerDiscoveryService
     }
 
     /**
-     * Deterministic pre-enrichment ranking (Step 19 + Trending Tracking).
-     * Reproducible (no randomness / no wall-clock). **Market cap is not a
-     * signal.** Priority, all descending "goodness":
+     * Deterministic pre-enrichment ranking (Step 19). Reproducible (no
+     * randomness / no wall-clock). **Market cap is not a signal.** Priority, all
+     * descending "goodness":
      *
      *   1. surfaced by a trending meta at all
-     *   2. recent trend-rank quality (from the near-real-time trending
-     *      collector — lower `trend_rank` is better, inverted here)
-     *   3. recent trend appearances (persistence)
-     *   4. number of distinct trending metas that surfaced it (multi-meta)
-     *   5. profile signal present
-     *   6. boost signal present
-     *   7. keyword-search occurrence count
-     *   8. profile freshness (list position) — a stable secondary tie-break
-     *   9. token key, ascending — total, stable final tie-break
+     *   2. number of distinct trending metas that surfaced it (multi-meta)
+     *   3. profile signal present
+     *   4. boost signal present
+     *   5. keyword-search occurrence count
+     *   6. profile freshness (list position) — a stable secondary tie-break
+     *   7. token key, ascending — total, stable final tie-break
      *
      * @param  array<string,array<string,mixed>>  $candidates
-     * @param  array<string,array{rank:int,appearances:int}>  $trendSignals  key => recent trend signal
      * @return list<array<string,mixed>>
      */
-    private function prioritizeCandidates(array $candidates, array $trendSignals = []): array
+    private function prioritizeCandidates(array $candidates): array
     {
         $ordered = array_values($candidates);
 
@@ -749,16 +742,10 @@ class DexScreenerDiscoveryService
             ? -1
             : PHP_INT_MAX - (int) $c['profile_rank'];
 
-        usort($ordered, static function (array $a, array $b) use ($freshness, $trendSignals): int {
-            $score = static function (array $c) use ($trendSignals, $freshness): array {
-                $signal = $trendSignals[$c['token_key']] ?? null;
-                // Lower rank is better; invert so bigger = better. No signal -> 0.
-                $rankQuality = $signal !== null ? max(0, 100_000 - $signal['rank']) : 0;
-
+        usort($ordered, static function (array $a, array $b) use ($freshness): int {
+            $score = static function (array $c) use ($freshness): array {
                 return [
                     in_array('trending_meta', $c['sources'], true) ? 1 : 0,
-                    $rankQuality,
-                    $signal['appearances'] ?? 0,
                     count($c['trending_metas'] ?? []),
                     in_array('profile', $c['sources'], true) ? 1 : 0,
                     $c['boost'] ? 1 : 0,
@@ -772,49 +759,6 @@ class DexScreenerDiscoveryService
         });
 
         return $ordered;
-    }
-
-    /**
-     * The most recent trend signal (best rank, max appearances across 6h/24h)
-     * for a set of candidate token keys, from the latest `trending_snapshots`
-     * capture. One query, no N+1. Empty when the trending collector has not run.
-     *
-     * @param  list<string>  $keys  "chain:addr" (lowercased)
-     * @return array<string,array{rank:int,appearances:int}>
-     */
-    private function recentTrendSignals(array $keys): array
-    {
-        if ($keys === []) {
-            return [];
-        }
-
-        $latestBucket = TrendingSnapshot::query()->max('capture_bucket');
-        if ($latestBucket === null) {
-            return [];
-        }
-
-        $rows = TrendingSnapshot::query()
-            ->where('capture_bucket', (int) $latestBucket)
-            ->selectRaw("lower(chain_id) || ':' || lower(token_address) as k, min(trend_rank) as rank, max(trend_appearances) as appearances")
-            ->groupBy('k')
-            ->pluck('appearances', 'k');
-
-        // Re-query for min rank keyed the same way (pluck only returns one value column).
-        $ranks = TrendingSnapshot::query()
-            ->where('capture_bucket', (int) $latestBucket)
-            ->selectRaw("lower(chain_id) || ':' || lower(token_address) as k, min(trend_rank) as rank")
-            ->groupBy('k')
-            ->pluck('rank', 'k');
-
-        $wanted = array_flip($keys);
-        $signals = [];
-        foreach ($ranks as $key => $rank) {
-            if (isset($wanted[$key])) {
-                $signals[$key] = ['rank' => (int) $rank, 'appearances' => (int) ($rows[$key] ?? 0)];
-            }
-        }
-
-        return $signals;
     }
 
     private function floatOrNull(mixed $value): ?float

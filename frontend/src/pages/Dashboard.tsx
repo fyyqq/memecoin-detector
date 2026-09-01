@@ -5,10 +5,7 @@ import {
   fetchMemecoins,
   fetchMonthlyChampions,
   fetchRecentlyCrossed,
-  fetchRiskWatch,
   fetchTopVolume,
-  fetchTrending,
-  fetchTrendingHistory,
   MemecoinApiError,
 } from '../api/memecoins'
 import { ChainActivity } from '../components/ChainActivity'
@@ -16,10 +13,7 @@ import { ChainFilter } from '../components/ChainFilter'
 import { MemecoinTable } from '../components/MemecoinTable'
 import { MonthlyChampions } from '../components/MonthlyChampions'
 import { RecentlyCrossedSection } from '../components/RecentlyCrossedSection'
-import { RiskWatchSection } from '../components/RiskWatchSection'
 import { TopVolume } from '../components/TopVolume'
-import { TrendingHistory } from '../components/TrendingHistory'
-import { TrendingNow } from '../components/TrendingNow'
 import { formatDateTime, formatUsd } from '../lib/format'
 import type {
   ChainActivityResponse,
@@ -27,17 +21,12 @@ import type {
   MemecoinSort,
   MonthlyChampionsResponse,
   RecentlyCrossedResponse,
-  RiskWatchResponse,
-  Timeframe,
   TopVolumeResponse,
-  TrendingHistoryResponse,
-  TrendingResponse,
 } from '../types/memecoin'
 
 type Status = 'loading' | 'ready' | 'error'
 
 const AUTO_REFRESH_MS = 60_000
-const TRENDING_REFRESH_MS = 5 * 60_000
 
 const DEFAULT_SORT: MemecoinSort = 'peak_market_cap'
 
@@ -57,21 +46,6 @@ export function Dashboard() {
   const [championsLoading, setChampionsLoading] = useState(true)
   const [championsError, setChampionsError] = useState('')
 
-  const [riskWatch, setRiskWatch] = useState<RiskWatchResponse | null>(null)
-  const [riskWatchLoading, setRiskWatchLoading] = useState(true)
-  const [riskWatchError, setRiskWatchError] = useState('')
-
-  const [trendTf, setTrendTf] = useState<Timeframe>('6h')
-  const [trending, setTrending] = useState<TrendingResponse | null>(null)
-  const [trendingLoading, setTrendingLoading] = useState(true)
-  const [trendingError, setTrendingError] = useState('')
-
-  const [histTf, setHistTf] = useState<Timeframe>('6h')
-  const [histChain, setHistChain] = useState('')
-  const [history, setHistory] = useState<TrendingHistoryResponse | null>(null)
-  const [historyLoading, setHistoryLoading] = useState(true)
-  const [historyError, setHistoryError] = useState('')
-
   const [topVolume, setTopVolume] = useState<TopVolumeResponse | null>(null)
   const [topVolumeLoading, setTopVolumeLoading] = useState(true)
   const [topVolumeError, setTopVolumeError] = useState('')
@@ -83,9 +57,6 @@ export function Dashboard() {
   const abortRef = useRef<AbortController | null>(null)
   const crossedAbortRef = useRef<AbortController | null>(null)
   const championsAbortRef = useRef<AbortController | null>(null)
-  const riskWatchAbortRef = useRef<AbortController | null>(null)
-  const trendingAbortRef = useRef<AbortController | null>(null)
-  const historyAbortRef = useRef<AbortController | null>(null)
   const topVolumeAbortRef = useRef<AbortController | null>(null)
   const chainActivityAbortRef = useRef<AbortController | null>(null)
 
@@ -143,54 +114,6 @@ export function Dashboard() {
     }
   }, [])
 
-  const loadRiskWatch = useCallback(async (nextChain: string) => {
-    riskWatchAbortRef.current?.abort()
-    const controller = new AbortController()
-    riskWatchAbortRef.current = controller
-    setRiskWatchLoading(true)
-    try {
-      setRiskWatch(await fetchRiskWatch(nextChain || undefined, controller.signal))
-      setRiskWatchError('')
-    } catch (error) {
-      if (error instanceof DOMException && error.name === 'AbortError') return
-      setRiskWatchError(message(error, 'Unable to load risk watch.'))
-    } finally {
-      if (riskWatchAbortRef.current === controller) setRiskWatchLoading(false)
-    }
-  }, [])
-
-  const loadTrending = useCallback(async (tf: Timeframe, nextChain: string) => {
-    trendingAbortRef.current?.abort()
-    const controller = new AbortController()
-    trendingAbortRef.current = controller
-    setTrendingLoading(true)
-    try {
-      setTrending(await fetchTrending(tf, nextChain || undefined, controller.signal))
-      setTrendingError('')
-    } catch (error) {
-      if (error instanceof DOMException && error.name === 'AbortError') return
-      setTrendingError(message(error, 'Unable to load trending.'))
-    } finally {
-      if (trendingAbortRef.current === controller) setTrendingLoading(false)
-    }
-  }, [])
-
-  const loadHistory = useCallback(async (tf: Timeframe, nextChain: string) => {
-    historyAbortRef.current?.abort()
-    const controller = new AbortController()
-    historyAbortRef.current = controller
-    setHistoryLoading(true)
-    try {
-      setHistory(await fetchTrendingHistory(tf, undefined, nextChain || undefined, controller.signal))
-      setHistoryError('')
-    } catch (error) {
-      if (error instanceof DOMException && error.name === 'AbortError') return
-      setHistoryError(message(error, "Unable to load yesterday's trending."))
-    } finally {
-      if (historyAbortRef.current === controller) setHistoryLoading(false)
-    }
-  }, [])
-
   const loadTopVolume = useCallback(async (nextChain: string) => {
     topVolumeAbortRef.current?.abort()
     const controller = new AbortController()
@@ -240,21 +163,6 @@ export function Dashboard() {
 
   useEffect(() => {
     // oxlint-disable-next-line react/set-state-in-effect
-    void loadRiskWatch(chain)
-  }, [chain, loadRiskWatch])
-
-  useEffect(() => {
-    // oxlint-disable-next-line react/set-state-in-effect
-    void loadTrending(trendTf, chain)
-  }, [trendTf, chain, loadTrending])
-
-  useEffect(() => {
-    // oxlint-disable-next-line react/set-state-in-effect
-    void loadHistory(histTf, histChain)
-  }, [histTf, histChain, loadHistory])
-
-  useEffect(() => {
-    // oxlint-disable-next-line react/set-state-in-effect
     void loadTopVolume(chain)
   }, [chain, loadTopVolume])
 
@@ -263,33 +171,22 @@ export function Dashboard() {
     void loadChainActivity()
   }, [loadChainActivity])
 
-  // Gentle auto-refresh — the main feeds every minute, trending every ~5 min.
+  // Gentle auto-refresh — every minute.
   useEffect(() => {
     const timer = window.setInterval(() => {
       void load(chain, sort)
       void loadCrossed()
-      void loadRiskWatch(chain)
       void loadTopVolume(chain)
       void loadChainActivity()
     }, AUTO_REFRESH_MS)
     return () => window.clearInterval(timer)
-  }, [chain, sort, load, loadCrossed, loadRiskWatch, loadTopVolume, loadChainActivity])
-
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      void loadTrending(trendTf, chain)
-    }, TRENDING_REFRESH_MS)
-    return () => window.clearInterval(timer)
-  }, [trendTf, chain, loadTrending])
+  }, [chain, sort, load, loadCrossed, loadTopVolume, loadChainActivity])
 
   useEffect(
     () => () => {
       abortRef.current?.abort()
       crossedAbortRef.current?.abort()
       championsAbortRef.current?.abort()
-      riskWatchAbortRef.current?.abort()
-      trendingAbortRef.current?.abort()
-      historyAbortRef.current?.abort()
       topVolumeAbortRef.current?.abort()
       chainActivityAbortRef.current?.abort()
     },
@@ -306,8 +203,6 @@ export function Dashboard() {
   const refreshAll = () => {
     void load(chain, sort)
     void loadCrossed()
-    void loadRiskWatch(chain)
-    void loadTrending(trendTf, chain)
     void loadTopVolume(chain)
     void loadChainActivity()
   }
@@ -317,7 +212,7 @@ export function Dashboard() {
       <header className="app-header">
         <div>
           <h1>Memecoin Detector</h1>
-          <p className="subtitle">Trending first — then filtered for market quality &amp; risk</p>
+          <p className="subtitle">Newly-launched memecoins, filtered for market quality &amp; risk</p>
         </div>
         <div className="controls">
           <ChainFilter value={chain} onChange={setChain} disabled={fetching} />
@@ -326,17 +221,6 @@ export function Dashboard() {
           </button>
         </div>
       </header>
-
-      <TrendingNow
-        result={trending}
-        timeframe={trendTf}
-        chain={chain}
-        loading={trendingLoading}
-        error={trendingError}
-        onTimeframe={setTrendTf}
-        onChain={setChain}
-        onRetry={() => void loadTrending(trendTf, chain)}
-      />
 
       <RecentlyCrossedSection
         rows={crossed?.data ?? []}
@@ -386,17 +270,11 @@ export function Dashboard() {
 
         <p className="muted">
           Main-list tokens are market-cap qualified <em>and</em> pass a conservative risk screen
-          (mature enough, lower/medium risk, enough security data, no hard safety failure). A token
-          can be trending and still not be here. This is a risk filter, not a guarantee of safety.
+          (mature enough, lower/medium risk, enough security data, no hard safety failure). A
+          qualified token that fails the screen is excluded here — its full risk assessment is still
+          on its detail page. This is a risk filter, not a guarantee of safety.
         </p>
       </section>
-
-      <RiskWatchSection
-        rows={riskWatch?.data ?? []}
-        loading={riskWatchLoading}
-        error={riskWatchError}
-        onRetry={() => void loadRiskWatch(chain)}
-      />
 
       <ChainActivity
         result={chainActivity}
@@ -420,17 +298,6 @@ export function Dashboard() {
         onRetry={() => void loadChampions()}
       />
 
-      <TrendingHistory
-        result={history}
-        timeframe={histTf}
-        chain={histChain}
-        loading={historyLoading}
-        error={historyError}
-        onTimeframe={setHistTf}
-        onChain={setHistChain}
-        onRetry={() => void loadHistory(histTf, histChain)}
-      />
-
       <footer className="provenance">
         <p>
           Data source: <strong>DexScreener</strong> (documented APIs only)
@@ -438,16 +305,14 @@ export function Dashboard() {
           {meta && <>{' · '}Retrieved: {formatDateTime(meta.retrieved_at)}</>}
         </p>
         <p className="muted">
-          Trending is ranked by our transparent internal <code>tracked_trend_score</code> — not
-          DexScreener&rsquo;s proprietary trending score, which is only on an undocumented feed.
           Volume figures are provider-reported, not certified organic.
         </p>
         <p className="muted">
           The dashboard reads persisted data from this app&rsquo;s API only
-          (<code>{API_BASE_URL}/api/memecoins</code>, <code>/trending</code>,{' '}
-          <code>/trending/history</code>, <code>/top-volume</code>, <code>/chain-activity</code>,{' '}
-          <code>/recently-crossed</code>, <code>/risk-watch</code>, <code>/monthly-champions</code>).
-          It never calls DexScreener, GoPlus or any provider directly, and never opens a WebSocket.
+          (<code>{API_BASE_URL}/api/memecoins</code>, <code>/top-volume</code>,{' '}
+          <code>/chain-activity</code>, <code>/recently-crossed</code>,{' '}
+          <code>/monthly-champions</code>). It never calls DexScreener, GoPlus or any provider
+          directly, and never opens a WebSocket.
         </p>
       </footer>
     </main>

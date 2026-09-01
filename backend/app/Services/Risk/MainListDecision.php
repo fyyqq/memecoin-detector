@@ -11,12 +11,12 @@ use Carbon\CarbonImmutable;
 
 /**
  * The single source of truth for "does this market-cap-qualified token belong on
- * the MAIN LIST, or on RISK WATCH?" (Step 24).
+ * the MAIN LIST?" (Step 24).
  *
- * Used by both `GET /api/memecoins` (main list) and
- * `GET /api/memecoins/risk-watch`. Market-cap qualification is assumed to be
- * already applied by the caller's query — this only adds the maturity +
- * risk-screening gate. It never calls a provider.
+ * Used by `GET /api/memecoins` (main list). Market-cap qualification is assumed
+ * to be already applied by the caller's query — this only adds the maturity +
+ * risk-screening gate. It never calls a provider. A token that fails this gate
+ * is excluded from the list (its assessment is still on its detail page).
  *
  * MAIN LIST requires ALL of:
  *   B. age >= MEMECOIN_MAIN_MIN_AGE_HOURS
@@ -108,8 +108,8 @@ final class MainListDecision
     }
 
     /**
-     * Concise, pre-written reason phrases for the RISK WATCH UI (never
-     * dynamically generated prose).
+     * Concise, pre-written phrases explaining why a token failed the MAIN LIST
+     * gate (never dynamically generated prose). Retained for diagnostics.
      *
      * @return list<string>
      */

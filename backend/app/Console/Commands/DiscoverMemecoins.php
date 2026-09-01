@@ -6,6 +6,8 @@ namespace App\Console\Commands;
 
 use App\Models\IngestionRun;
 use App\Services\DexScreener\DexScreenerDiscoveryService;
+use App\Services\Trending\ChainActivityRollup;
+use Carbon\CarbonImmutable;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
 use Throwable;
@@ -27,7 +29,7 @@ class DiscoverMemecoins extends Command
 
     protected $description = 'Discover memecoins from DexScreener and persist market observations';
 
-    public function handle(DexScreenerDiscoveryService $discovery): int
+    public function handle(DexScreenerDiscoveryService $discovery, ChainActivityRollup $chainActivity): int
     {
         $trigger = $this->option('trigger') === IngestionRun::TRIGGER_MANUAL
             ? IngestionRun::TRIGGER_MANUAL
@@ -46,6 +48,17 @@ class DiscoverMemecoins extends Command
 
         $d = $result->diagnostics;
 
+        // Recompute the materialised "Chain Market Activity" rows from tokens +
+        // their latest snapshots. Folded into discovery (every ~10 min) so the
+        // /chain-activity + /top-volume dashboard views stay fresh without a
+        // separate job.
+        $chainActivityRows = 0;
+        try {
+            $chainActivityRows = $chainActivity->recompute(CarbonImmutable::now());
+        } catch (Throwable $e) {
+            Log::warning('Chain activity rollup failed', ['error' => $e->getMessage()]);
+        }
+
         $summary = [
             'ingestion_run' => $result->ingestionRunId,
             'trigger' => $trigger,
@@ -57,6 +70,7 @@ class DiscoverMemecoins extends Command
             'new_tokens' => $d['new_tokens'],
             'peak_updated' => $d['peak_updated'],
             'qualified' => $d['qualified'],
+            'chain_activity_rows' => $chainActivityRows,
         ];
 
         Log::info('Memecoin discovery completed', $summary);
@@ -72,6 +86,7 @@ class DiscoverMemecoins extends Command
         $this->line('New tokens:         '.$d['new_tokens']);
         $this->line('Peak updated:       '.$d['peak_updated']);
         $this->line('Qualified:          '.$d['qualified']);
+        $this->line('Chain activity rows: '.$chainActivityRows);
 
         return self::SUCCESS;
     }

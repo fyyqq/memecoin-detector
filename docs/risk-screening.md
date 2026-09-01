@@ -1,8 +1,7 @@
 # Memecoin Risk & Safety Screening (Step 24)
 
 A conservative, **deterministic** risk screen layered **on top of** the existing
-market-cap qualification. It routes an already-qualified token to one of two
-homepage lanes:
+market-cap qualification. It gates the MAIN LIST:
 
 ```
 MARKET-CAP QUALIFICATION  (Step 19 — unchanged)
@@ -11,12 +10,18 @@ MARKET-CAP QUALIFICATION  (Step 19 — unchanged)
 RISK SCREENING  (this step — memecoins:screen-risk)
         ▼
 ┌───────────────────────────┐        ┌───────────────────────────┐
-│ MAIN LIST                 │        │ RISK WATCH                │
+│ MAIN LIST (GET /memecoins)│        │ excluded from every list  │
 │ LOWER / MEDIUM risk       │        │ HIGH / CRITICAL / UNKNOWN  │
-│ mature (≥ 72h) · screened │        │ or too young · visible,   │
-│                           │        │ flagged, never hidden     │
+│ mature (≥ 72h) · screened │        │ or too young — full        │
+│                           │        │ assessment on detail page  │
 └───────────────────────────┘        └───────────────────────────┘
 ```
+
+> **Removed:** the "⚠️ Risk Watch" homepage section and
+> `GET /api/memecoins/risk-watch`. The screen still runs and still gates the
+> MAIN LIST; a qualified token that fails it is now simply excluded from the
+> list (its `data.risk_assessment` stays on the detail API). References to
+> "RISK WATCH" below mean "excluded from the MAIN LIST".
 
 **No AI.** Scoring is a transparent weighted sum with hard overrides. The LLM
 stays in the pump-explanation / narrative features only.
@@ -43,17 +48,19 @@ never the word "safe").
 The maturity gate (B) is applied **live in the read query** so it never goes
 stale; the rest is read from the persisted assessment.
 
-## 2. Risk Watch purpose
+## 2. Tokens that fail the screen
 
-`GET /api/memecoins/risk-watch` returns tokens that **are** market-cap qualified
-but **fail** the main-list screen — HIGH / CRITICAL / RISK UNKNOWN risk, too
-young, insufficient security data, or a hard filter. They are shown **for
-transparency** — never deleted, never hidden. Each row exposes `failed_signals`
-(the BAD signals with source + severity + pre-written explanation) and `reasons`
-(pre-written reason phrases — only what was actually measured).
+A token that **is** market-cap qualified but **fails** the main-list screen —
+HIGH / CRITICAL / RISK UNKNOWN risk, too young, insufficient security data, or a
+hard filter — is **excluded from `GET /api/memecoins`** (and from every other
+list). Its full, grouped assessment is still on the detail API
+(`data.risk_assessment` — signals, tri-state, sources, disclaimer), so it is
+never *hidden*, just not surfaced in a list. `MainListDecision::reasonLabels()`
+still produces the pre-written reason phrases (retained for diagnostics).
 
 MAIN LIST = "qualified + lower/medium screening risk".
-RISK WATCH = "qualified by market cap, but risk checks require caution".
+Not on the MAIN LIST = "qualified by market cap, but risk checks require caution
+(or the token is too young)".
 DISQUALIFIED (dropped) = only tokens that were never market-cap qualified —
 risk screening never removes a token from the dataset.
 
@@ -284,20 +291,12 @@ value, its source, its `checked_at`, and whether it was measured or unavailable.
 Risk is point-in-time (`screened_at`); a contract can be re-proxied or
 un-renounced after a scan.
 
-### Trending ↔ risk separation
+### Risk scan staleness
 
-Trending Tracking ([trending-tracking.md](trending-tracking.md)) never touches
-risk. A trending token still has to pass market-cap qualification **and** this
-risk screen to reach the MAIN LIST — otherwise it goes to RISK WATCH, where it
-stays visible with its risk level, failed checks, trend rank, timeframe and
-last-trending time. A token can be **TRENDING + RISK WATCH** at the same time;
-trending is attention, not safety.
-
-`memecoins:collect-trending` does **not** refresh a risk scan (it keeps the
-`MEMECOIN_RISK_SCAN_COOLDOWN_HOURS` = 6h cooldown), so a trending token's scan
-can be stale. `GET /api/memecoins/trending` and `/top-volume` return
-`risk_checked_at` + `risk_check_stale`; the UI shows **"RISK CHECK STALE"** and
-never silently treats a stale (or absent) scan as safe.
+Risk is point-in-time. `GET /api/memecoins/top-volume` returns `risk_checked_at`
++ `risk_check_stale` (true when the last scan is older than
+`MEMECOIN_RISK_SCAN_COOLDOWN_HOURS` = 6h, or never run); the UI shows **"RISK
+CHECK STALE"** and never silently treats a stale (or absent) scan as safe.
 
 ## 15. Limitations
 
@@ -371,9 +370,8 @@ container (no new container).
 ## APIs
 
 - `GET /api/memecoins` — MAIN LIST. Adds `risk_level` / `risk_score` /
-  `data_completeness` / `risk_summary` per row. PostgreSQL only.
-- `GET /api/memecoins/risk-watch` — RISK WATCH. `?chain=` / `?limit=`.
-  PostgreSQL only.
+  `data_completeness` / `risk_summary` per row. A qualified token that fails the
+  screen is excluded. PostgreSQL only.
 - `GET /api/memecoins/{chain}/{address}` — adds `data.risk_assessment`
   (`status`, `risk_level`, `risk_score`, `data_completeness`, `screened_at`,
   `hard_override_signal`, grouped `signals[]`, `disclaimer`). `status: "pending"`
@@ -384,9 +382,8 @@ container (no new container).
 
 Homepage: **🔥 Recently Crossed $5M** → **🟢 Main Memecoin List**
 (Token / Chain / Age / Current MC / Peak MC / **Risk** / Volume / Liquidity;
-compact `LOWER` / `MEDIUM` chip) → **⚠️ Risk Watch**
-(Token / Chain / Age / Current MC / Peak MC / **Risk** / **Why flagged**; `HIGH`
-/ `CRITICAL` / `RISK UNKNOWN` chip + only-measured reason phrases). Detail page
+compact `LOWER` / `MEDIUM` chip). A qualified token that fails the screen is not
+shown here — see its detail page. Detail page
 gains a **"Risk Assessment"** section (level, score, data completeness, last
 screened, then signal groups with ✅ / ⚠ / ❓ per signal, each expandable for
 source + checked time). Copy-CA and row-click behaviour unchanged; the risk

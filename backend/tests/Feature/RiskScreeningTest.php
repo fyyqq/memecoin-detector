@@ -16,6 +16,7 @@ use App\Services\Risk\GoPlusSecurityLookup;
 use App\Services\Risk\HolderConcentration;
 use App\Services\Risk\HolderConcentrationAnalyzer;
 use App\Services\Risk\LiquidityStructure;
+use App\Services\Risk\MainListDecision;
 use App\Services\Risk\RiskScoreCalculator;
 use App\Services\Risk\RiskScreeningService;
 use App\Services\Risk\RiskSignalDraft;
@@ -572,12 +573,11 @@ class RiskScreeningTest extends TestCase
 
         $this->getJson('/api/memecoins')->assertOk()->assertJsonPath('meta.count', 0);
 
-        $watch = $this->getJson('/api/memecoins/risk-watch')->assertOk();
-        $watch->assertJsonPath('meta.count', 1);
-        $watch->assertJsonPath('data.0.risk_level', RiskAssessment::LEVEL_LOWER);
+        $decision = MainListDecision::for($token->fresh()->load('riskAssessment.signals'), $this->now);
+        $this->assertFalse($decision->eligible);
         $this->assertContains(
             'Token is younger than the main-list maturity minimum.',
-            $watch->json('data.0.reasons'),
+            $decision->reasonLabels(),
         );
     }
 
@@ -696,19 +696,15 @@ class RiskScreeningTest extends TestCase
     }
 
     #[Test]
-    public function the_risk_watch_endpoint_returns_failed_screen_tokens_with_their_failing_signals(): void
+    public function a_high_risk_qualified_token_is_excluded_from_the_main_list(): void
     {
         $this->makeTokenWithSnapshotAndRisk('WATCH', fn (Token $t) => $this->failRisk($t, RiskAssessment::LEVEL_HIGH));
         $this->makeTokenWithSnapshotAndRisk('OKAY', fn (Token $t) => $this->passRisk($t));
 
-        $res = $this->getJson('/api/memecoins/risk-watch')->assertOk();
+        $res = $this->getJson('/api/memecoins')->assertOk();
 
         $res->assertJsonPath('meta.count', 1);
-        $res->assertJsonPath('data.0.symbol', 'WATCH');
-        $res->assertJsonPath('data.0.risk_level', RiskAssessment::LEVEL_HIGH);
-        $this->assertNotEmpty($res->json('data.0.failed_signals'));
-        $this->assertSame('is_mintable', $res->json('data.0.failed_signals.0.signal'));
-        $this->assertSame('BAD', $res->json('data.0.failed_signals.0.state'));
+        $res->assertJsonPath('data.0.symbol', 'OKAY');
     }
 
     #[Test]
@@ -719,7 +715,6 @@ class RiskScreeningTest extends TestCase
         $this->makeTokenWithSnapshotAndRisk('B', fn (Token $t) => $this->failRisk($t));
 
         $this->getJson('/api/memecoins')->assertOk();
-        $this->getJson('/api/memecoins/risk-watch')->assertOk();
         $token = Token::query()->first();
         $this->getJson("/api/memecoins/{$token->chain_id}/{$token->token_address}")->assertOk();
 
@@ -774,12 +769,9 @@ class RiskScreeningTest extends TestCase
         $this->makeTokenWithSnapshotAndRisk('CLEAN', fn (Token $t) => $this->passRisk($t));
         $this->makeTokenWithSnapshotAndRisk('DANGER', fn (Token $t) => $this->failRisk($t, RiskAssessment::LEVEL_CRITICAL));
 
-        $main = $this->getJson('/api/memecoins')->assertOk()->json();
-        $watch = $this->getJson('/api/memecoins/risk-watch')->assertOk()->json();
-
-        $blob = strtolower(json_encode($main).json_encode($watch));
+        $blob = strtolower(json_encode($this->getJson('/api/memecoins')->assertOk()->json()));
         $this->assertStringNotContainsString('safe coin', $blob);
-        $this->assertStringNotContainsString('guaranteed', $blob);
+        $this->assertStringNotContainsString('guaranteed safe', $blob);
         $this->assertStringNotContainsString('safe investment', $blob);
     }
 

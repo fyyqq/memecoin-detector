@@ -7,10 +7,7 @@ use App\Http\Controllers\Api\MemecoinDiscoveryStatusController;
 use App\Http\Controllers\Api\MemecoinListController;
 use App\Http\Controllers\Api\MonthlyChampionsController;
 use App\Http\Controllers\Api\RecentlyCrossedController;
-use App\Http\Controllers\Api\RiskWatchController;
 use App\Http\Controllers\Api\TopVolumeController;
-use App\Http\Controllers\Api\TrendingController;
-use App\Http\Controllers\Api\TrendingHistoryController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/health', function () {
@@ -37,18 +34,8 @@ Route::get('/memecoins/recently-crossed', RecentlyCrossedController::class);
 // only, never recomputes, never queries snapshots, never calls a provider.
 Route::get('/memecoins/monthly-champions', MonthlyChampionsController::class);
 
-// Read-only "Risk Watch" feed (Step 24) — market-cap-qualified tokens that fail
-// the MAIN LIST risk screen (HIGH / CRITICAL / UNKNOWN / too young). PostgreSQL
-// only, never calls a security provider. Defined before the {chainId}/{tokenAddress}
-// route so the literal segment always wins.
-Route::get('/memecoins/risk-watch', RiskWatchController::class);
-
-// Near-real-time Trending Tracking (PostgreSQL only — never DexScreener, never a
-// WebSocket, never a security provider). "Tracked Trending", not DexScreener's
-// proprietary trendingScore. All defined before the {chainId}/{tokenAddress}
-// wildcard.
-Route::get('/memecoins/trending', TrendingController::class);
-Route::get('/memecoins/trending/history', TrendingHistoryController::class);
+// Chain-level market views (PostgreSQL only — never DexScreener, never a
+// security provider). All defined before the {chainId}/{tokenAddress} wildcard.
 Route::get('/memecoins/top-volume', TopVolumeController::class);
 Route::get('/memecoins/chain-activity', ChainActivityController::class);
 

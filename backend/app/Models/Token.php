@@ -188,42 +188,4 @@ class Token extends Model
     {
         return $this->hasOne(RiskAssessment::class);
     }
-
-    /**
-     * Every trending capture recorded for this token (6h + 24h). History —
-     * never pruned by a read API.
-     *
-     * @return HasMany<TrendingSnapshot, $this>
-     */
-    public function trendingSnapshots(): HasMany
-    {
-        return $this->hasMany(TrendingSnapshot::class);
-    }
-
-    /**
-     * The token's most recent 6h trending capture, for eager-loading a "Trend"
-     * column on the list APIs without N+1.
-     *
-     * @return HasOne<TrendingSnapshot, $this>
-     */
-    public function latestTrending6h(): HasOne
-    {
-        return $this->hasOne(TrendingSnapshot::class)->ofMany(
-            ['capture_bucket' => 'max'],
-            fn ($query) => $query->where('timeframe', TrendingSnapshot::TIMEFRAME_6H),
-        );
-    }
-
-    /**
-     * The token's most recent 24h trending capture.
-     *
-     * @return HasOne<TrendingSnapshot, $this>
-     */
-    public function latestTrending24h(): HasOne
-    {
-        return $this->hasOne(TrendingSnapshot::class)->ofMany(
-            ['capture_bucket' => 'max'],
-            fn ($query) => $query->where('timeframe', TrendingSnapshot::TIMEFRAME_24H),
-        );
-    }
 }

@@ -12,7 +12,7 @@ final class RiskScreeningRunResult
     public function __construct(
         public int $tokensAnalyzed = 0,
         public int $mainListEligible = 0,
-        public int $riskWatch = 0,
+        public int $notMainListEligible = 0,
         public int $lower = 0,
         public int $medium = 0,
         public int $high = 0,
@@ -29,7 +29,7 @@ final class RiskScreeningRunResult
         return [
             'tokens_analyzed' => $this->tokensAnalyzed,
             'main_list_eligible' => $this->mainListEligible,
-            'risk_watch' => $this->riskWatch,
+            'not_main_list_eligible' => $this->notMainListEligible,
             'lower' => $this->lower,
             'medium' => $this->medium,
             'high' => $this->high,

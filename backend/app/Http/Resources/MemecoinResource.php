@@ -74,11 +74,6 @@ class MemecoinResource extends JsonResource
             // dynamically generated prose, and never the word "safe".
             ...$this->riskFields(),
 
-            // Trending Tracking — this token's latest "Tracked Trending" state
-            // (our transparent internal score, NOT DexScreener's proprietary
-            // trendingScore). null when the token is not currently trending.
-            'trend' => $this->trendFields(),
-
             'age_days' => $this->ageDays(),
 
             'liquidity_usd' => $snapshot?->liquidity_usd,
@@ -129,34 +124,6 @@ class MemecoinResource extends JsonResource
             'risk_score' => $assessment->risk_score,
             'data_completeness' => round((float) $assessment->data_completeness, 3),
             'risk_summary' => $summary,
-        ];
-    }
-
-    /**
-     * The token's latest "Tracked Trending" state (6h + 24h). Reads the
-     * eager-loaded `latestTrending6h` / `latestTrending24h` relations (no query).
-     * `null` when the token is not currently trending in either timeframe.
-     *
-     * This is our transparent internal score — NOT DexScreener's proprietary
-     * `trendingScore`.
-     *
-     * @return array<string,mixed>|null
-     */
-    private function trendFields(): ?array
-    {
-        $six = $this->relationLoaded('latestTrending6h') ? $this->latestTrending6h : null;
-        $day = $this->relationLoaded('latestTrending24h') ? $this->latestTrending24h : null;
-
-        if ($six === null && $day === null) {
-            return null;
-        }
-
-        return [
-            'tracked_trend_score_6h' => $six?->tracked_trend_score,
-            'trend_rank_6h' => $six?->trend_rank,
-            'tracked_trend_score_24h' => $day?->tracked_trend_score,
-            'trend_rank_24h' => $day?->trend_rank,
-            'captured_at' => ($six?->captured_at ?? $day?->captured_at)?->toIso8601String(),
         ];
     }
 

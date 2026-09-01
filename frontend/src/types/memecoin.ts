@@ -10,9 +10,6 @@ export type CrossingType = 'CURRENT_OBSERVATION' | 'HISTORICAL_VERIFIED'
  */
 export type RiskLevel = 'LOWER' | 'MEDIUM' | 'HIGH' | 'CRITICAL' | 'UNKNOWN'
 
-/** Tri-state (+ NOT_AVAILABLE) for one risk signal. */
-export type RiskSignalState = 'MEASURED' | 'BAD' | 'UNKNOWN' | 'NOT_AVAILABLE'
-
 /** Sort options for `GET /api/memecoins`. */
 export type MemecoinSort = 'peak_market_cap' | 'recent_crossing'
 
@@ -55,12 +52,6 @@ export interface Memecoin {
   risk_score: number | null
   data_completeness: number | null
   risk_summary: string[]
-
-  /**
-   * Trending Tracking — this token's latest "Tracked Trending" state. `null`
-   * when it is not currently trending. NOT DexScreener's proprietary score.
-   */
-  trend: MemecoinTrend | null
 
   /** Days since earliest DEX pool creation (not token deploy time). */
   age_days: number | null
@@ -121,48 +112,6 @@ export interface RecentlyCrossedResponse {
   data: RecentlyCrossedRow[]
   meta: {
     hours: number
-    count: number
-    retrieved_at: string
-    source: string
-    note: string
-  }
-}
-
-// --- Step 24: Risk Watch ----------------------------------------------------
-
-/** One failing risk signal on a Risk Watch row. Explanations are pre-written. */
-export interface RiskWatchFailedSignal {
-  signal: string
-  group: string
-  state: RiskSignalState
-  value: string | null
-  source: string | null
-  severity: 'none' | 'low' | 'medium' | 'high' | 'critical'
-  explanation: string | null
-}
-
-/** One row of `GET /api/memecoins/risk-watch` — qualified by market cap, failed the risk screen. */
-export interface RiskWatchRow {
-  id: number
-  chain_id: string
-  token_address: string
-  name: string | null
-  symbol: string | null
-  current_mc: number | null
-  peak_mc: number | null
-  age_days: number | null
-  risk_level: RiskLevel
-  risk_score: number | null
-  data_completeness: number | null
-  screened_at: string | null
-  /** Concise pre-written reason phrases — only what was actually measured. */
-  reasons: string[]
-  failed_signals: RiskWatchFailedSignal[]
-}
-
-export interface RiskWatchResponse {
-  data: RiskWatchRow[]
-  meta: {
     count: number
     retrieved_at: string
     source: string
@@ -281,124 +230,7 @@ export interface MonthlyChampionsResponse {
   }
 }
 
-// --- Trending Tracking -----------------------------------------------------
-
-/** 6H / 24H — the two timeframes we track. */
-export type Timeframe = '6h' | '24h'
-
-export const TIMEFRAMES: Timeframe[] = ['6h', '24h']
-
-/** A token's latest "Tracked Trending" state, embedded on Main List / Risk Watch rows. */
-export interface MemecoinTrend {
-  tracked_trend_score_6h: number | null
-  trend_rank_6h: number | null
-  tracked_trend_score_24h: number | null
-  trend_rank_24h: number | null
-  captured_at?: string | null
-  last_trending_at?: string | null
-}
-
-/** One row of `GET /api/memecoins/trending` — a TOP-N eligible trending memecoin. */
-export interface TrendingRow {
-  /** 1-based position in this (filtered, top-N) response. */
-  rank: number
-  /** The stored rank among ALL eligible memecoins in this capture (context). */
-  trend_rank: number
-  tracked_trend_score: number
-  trend_components: Record<string, number> | null
-  trend_appearances: number
-  timeframe: Timeframe
-  is_memecoin_candidate: 'TRUE' | 'UNKNOWN' | 'FALSE' | null
-
-  token_id: number | null
-  chain_id: string
-  chain_bucket: ChainBucket
-  token_address: string
-  pair_address: string | null
-  dex_id: string | null
-  symbol: string | null
-  name: string | null
-
-  age_days: number | null
-  market_cap: number | null
-  liquidity_usd: number | null
-  volume_usd: number | null
-  price_change_pct: number | null
-  transaction_count: number | null
-
-  trending_meta_slug: string | null
-  trending_meta_name: string | null
-  captured_at: string | null
-
-  /** Risk is SEPARATE from trending — shown, never used to hide the row. */
-  risk_level: RiskLevel | null
-  risk_score: number | null
-  risk_checked_at: string | null
-  risk_check_stale: boolean
-  is_tracked: boolean
-  main_list_eligible: boolean
-}
-
-export interface TrendingResponse {
-  data: TrendingRow[]
-  meta: {
-    timeframe: Timeframe
-    chain: string | null
-    count: number
-    top_n: number
-    top_max: number
-    capture_bucket: number | null
-    captured_at: string | null
-    refresh_minutes: number
-    retrieved_at: string
-    source: string
-    filters: {
-      memecoin_only: boolean
-      max_age_days: number
-      min_current_market_cap: number
-      max_current_market_cap: number
-      volume_required: boolean
-      liquidity_required: boolean
-    }
-    note: string
-  }
-}
-
-/** One row of `GET /api/memecoins/trending/history`. */
-export interface TrendingHistoryRow {
-  best_rank: number
-  best_score: number
-  appearances: number
-  timeframe: Timeframe
-  chain_bucket: ChainBucket
-  token_id: number | null
-  chain_id: string
-  token_address: string
-  symbol: string | null
-  name: string | null
-  is_tracked: boolean
-  peak_market_cap: number | null
-  peak_volume: number | null
-  peak_liquidity: number | null
-  trending_meta_slug: string | null
-  trending_meta_name: string | null
-  first_seen_at: string | null
-  last_seen_at: string | null
-}
-
-export interface TrendingHistoryResponse {
-  data: TrendingHistoryRow[]
-  meta: {
-    date: string
-    timeframe: Timeframe
-    chain: string | null
-    count: number
-    is_yesterday: boolean
-    retrieved_at: string
-    source: string
-    note: string
-  }
-}
+// --- Chain-level market views ---------------------------------------------
 
 /** `GET /api/memecoins/top-volume` — one chain bucket. */
 export interface TopVolumeChain {

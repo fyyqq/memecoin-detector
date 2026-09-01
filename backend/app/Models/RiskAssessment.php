@@ -76,9 +76,4 @@ class RiskAssessment extends Model
     {
         return $this->hasMany(RiskSignal::class);
     }
-
-    public function isRiskWatch(): bool
-    {
-        return ! $this->main_list_eligible;
-    }
 }

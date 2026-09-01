@@ -1520,21 +1520,6 @@
   white-space: nowrap;
 }
 
-.risk-watch .qualification {
-  color: #6b7280;
-}
-
-.risk-watch-reasons {
-  margin: 0;
-  padding-left: 1rem;
-  font-size: 0.72rem;
-  color: #6b7280;
-}
-
-.risk-watch-reasons li {
-  margin: 0.1rem 0;
-}
-
 .risk-card {
   border: 1px solid #e5e7eb;
   border-left-width: 4px;
@@ -1684,9 +1669,7 @@
     color: #d1d5db;
   }
 
-  .risk-summary,
-  .risk-watch .qualification,
-  .risk-watch-reasons {
+  .risk-summary {
     color: #9ca3af;
   }
 
@@ -1726,96 +1709,6 @@
   .risk-hard-override {
     color: #fdba74;
   }
-}
-
-/* --- Trending Tracking -------------------------------------------------- */
-
-.trend-controls {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem;
-  margin: 0.6rem 0 0.9rem;
-}
-
-.trend-tabs,
-.trend-chain-filter {
-  display: inline-flex;
-  gap: 0.25rem;
-  flex-wrap: wrap;
-}
-
-.trend-tabs button,
-.trend-chain-filter button {
-  padding: 0.25rem 0.7rem;
-  border: 1px solid #d1d5db;
-  border-radius: 6px;
-  background: #fff;
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: #374151;
-  cursor: pointer;
-}
-
-.trend-tabs button.is-active,
-.trend-chain-filter button.is-active {
-  background: #1d4ed8;
-  border-color: #1d4ed8;
-  color: #fff;
-}
-
-.trend-score {
-  display: inline-block;
-  min-width: 2rem;
-  padding: 0.08rem 0.4rem;
-  border-radius: 5px;
-  font-weight: 700;
-  font-size: 0.72rem;
-  text-align: center;
-}
-
-.trend-score-hot {
-  background: #fee2e2;
-  color: #b91c1c;
-}
-
-.trend-score-warm {
-  background: #ffedd5;
-  color: #c2410c;
-}
-
-.trend-score-mild {
-  background: #fef9c3;
-  color: #854d0e;
-}
-
-.trend-score-cool {
-  background: #e5e7eb;
-  color: #4b5563;
-}
-
-.trend-tag {
-  display: inline-block;
-  margin-left: 0.4rem;
-  padding: 0.02rem 0.35rem;
-  border-radius: 4px;
-  font-size: 0.6rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-}
-
-.trend-tag-main {
-  background: #dcfce7;
-  color: #166534;
-}
-
-.risk-stale {
-  display: block;
-  margin-top: 0.2rem;
-  font-size: 0.62rem;
-  font-weight: 700;
-  letter-spacing: 0.03em;
-  color: #b45309;
 }
 
 .chain-activity-grid {
@@ -1949,49 +1842,6 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  .trend-tabs button,
-  .trend-chain-filter button {
-    background: #111827;
-    border-color: #374151;
-    color: #d1d5db;
-  }
-
-  .trend-tabs button.is-active,
-  .trend-chain-filter button.is-active {
-    background: #2563eb;
-    border-color: #2563eb;
-    color: #fff;
-  }
-
-  .trend-score-hot {
-    background: #7f1d1d;
-    color: #fecaca;
-  }
-
-  .trend-score-warm {
-    background: #7c2d12;
-    color: #fed7aa;
-  }
-
-  .trend-score-mild {
-    background: #713f12;
-    color: #fde68a;
-  }
-
-  .trend-score-cool {
-    background: #374151;
-    color: #d1d5db;
-  }
-
-  .trend-tag-main {
-    background: #14532d;
-    color: #bbf7d0;
-  }
-
-  .risk-stale {
-    color: #fbbf24;
-  }
-
   .chain-card,
   .top-volume-card {
     background: #0f172a;

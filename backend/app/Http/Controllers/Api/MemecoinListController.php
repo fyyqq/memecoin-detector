@@ -29,8 +29,8 @@ class MemecoinListController extends Controller
      *      (>= MEMECOIN_MAIN_MIN_AGE_HOURS), risk_level in {LOWER, MEDIUM},
      *      data completeness >= minimum, and no hard filter tripped.
      *
-     * Everything that is market-cap qualified but fails (2) is on
-     * `GET /api/memecoins/risk-watch` — visible, flagged, never hidden.
+     * A token that is market-cap qualified but fails (2) is excluded from this
+     * list; its full risk assessment is still on its detail page.
      */
     public const SORT_PEAK_MARKET_CAP = 'peak_market_cap';
 
@@ -66,8 +66,6 @@ class MemecoinListController extends Controller
                 'historicalPeakEvidence',
                 'qualificationEvents',
                 'riskAssessment.signals',
-                'latestTrending6h',
-                'latestTrending24h',
             ])
             ->limit(500)
             ->get();

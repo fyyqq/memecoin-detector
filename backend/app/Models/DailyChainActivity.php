@@ -10,10 +10,11 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 /**
  * One materialised "Chain Market Activity" row per chain bucket per day.
  *
- * Upserted by `collect-trending` from `tokens` + each token's latest
- * `market_snapshot` (deduplicated token-level representative-pair volume, behind
- * the market-integrity gate). `total_volume_usd` is REPORTED volume — never
- * claimed organic. `GET /api/memecoins/chain-activity` reads this table only.
+ * Upserted by `ChainActivityRollup` (which runs inside `memecoins:discover`)
+ * from `tokens` + each token's latest `market_snapshot` (deduplicated
+ * token-level representative-pair volume, behind the market-integrity gate).
+ * `total_volume_usd` is REPORTED volume — never claimed organic.
+ * `GET /api/memecoins/chain-activity` reads this table only.
  */
 class DailyChainActivity extends Model
 {

@@ -4,11 +4,7 @@ import type {
   MemecoinQuery,
   MonthlyChampionsResponse,
   RecentlyCrossedResponse,
-  RiskWatchResponse,
-  Timeframe,
   TopVolumeResponse,
-  TrendingHistoryResponse,
-  TrendingResponse,
 } from '../types/memecoin'
 
 const API_BASE_URL = (import.meta.env.VITE_API_URL ?? 'http://localhost:8010').replace(/\/$/, '')
@@ -73,57 +69,6 @@ export async function fetchMonthlyChampions(
   }`
 
   return getJson<MonthlyChampionsResponse>(url, signal)
-}
-
-/**
- * Fetch the "Risk Watch" feed (Step 24) — market-cap-qualified tokens that fail
- * the main-list risk screen. Laravel-only, PostgreSQL-only — never a security
- * provider. This is a risk filter, not a "safe to invest" signal.
- */
-export async function fetchRiskWatch(
-  chain?: string,
-  signal?: AbortSignal,
-): Promise<RiskWatchResponse> {
-  const params = new URLSearchParams()
-  if (chain) params.set('chain', chain)
-  const url = `${API_BASE_URL}/api/memecoins/risk-watch${params.toString() ? `?${params}` : ''}`
-
-  return getJson<RiskWatchResponse>(url, signal)
-}
-
-/**
- * Fetch "Tracked Trending" for a timeframe (6h / 24h). Laravel-only,
- * PostgreSQL-only — reads `trending_snapshots`, never DexScreener, never a
- * WebSocket. This is our transparent internal ranking, NOT DexScreener's
- * proprietary trendingScore.
- */
-export async function fetchTrending(
-  timeframe: Timeframe,
-  chain?: string,
-  signal?: AbortSignal,
-): Promise<TrendingResponse> {
-  const params = new URLSearchParams({ timeframe })
-  if (chain) params.set('chain', chain)
-  return getJson<TrendingResponse>(`${API_BASE_URL}/api/memecoins/trending?${params}`, signal)
-}
-
-/**
- * Fetch "Trending Yesterday" — reads `daily_trending_rankings` only. Never
- * recomputes from current state, never calls a provider.
- */
-export async function fetchTrendingHistory(
-  timeframe: Timeframe,
-  date?: string,
-  chain?: string,
-  signal?: AbortSignal,
-): Promise<TrendingHistoryResponse> {
-  const params = new URLSearchParams({ timeframe })
-  if (date) params.set('date', date)
-  if (chain) params.set('chain', chain)
-  return getJson<TrendingHistoryResponse>(
-    `${API_BASE_URL}/api/memecoins/trending/history?${params}`,
-    signal,
-  )
 }
 
 /**

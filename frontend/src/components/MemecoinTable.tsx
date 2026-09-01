@@ -1,7 +1,6 @@
 import { useNavigate } from 'react-router-dom'
 import type { Memecoin } from '../types/memecoin'
 import { formatAgeDays, formatUsd } from '../lib/format'
-import { formatTrendScore, trendTone } from '../lib/trend'
 import { CopyAddress } from './CopyAddress'
 import { QualificationBadge } from './QualificationBadge'
 import { RiskChip } from './RiskChip'
@@ -32,7 +31,6 @@ export function MemecoinTable({ rows }: MemecoinTableProps) {
             <th className="num">Age</th>
             <th className="num">Current MC</th>
             <th className="num">Peak MC</th>
-            <th className="num">Trend</th>
             <th>Risk</th>
             <th className="num">24h Volume</th>
             <th className="num">Liquidity</th>
@@ -66,18 +64,6 @@ export function MemecoinTable({ rows }: MemecoinTableProps) {
               <td className="num">{formatAgeDays(row.age_days)}</td>
               <td className="num">{formatUsd(row.current_market_cap)}</td>
               <td className="num strong">{formatUsd(row.observed_peak_market_cap)}</td>
-              <td className="num">
-                {row.trend ? (
-                  <span
-                    className={`trend-score trend-score-${trendTone(row.trend.tracked_trend_score_6h)}`}
-                    title={`6H #${row.trend.trend_rank_6h ?? '—'} · 24H #${row.trend.trend_rank_24h ?? '—'} (tracked trend score)`}
-                  >
-                    {formatTrendScore(row.trend.tracked_trend_score_6h)}
-                  </span>
-                ) : (
-                  '—'
-                )}
-              </td>
               <td>
                 <RiskChip level={row.risk_level} score={row.risk_score} />
                 {row.risk_summary.length > 0 && (

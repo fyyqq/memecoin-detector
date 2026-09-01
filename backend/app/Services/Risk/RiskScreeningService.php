@@ -176,7 +176,7 @@ class RiskScreeningService
             : 0.0;
         $mainEligible = $assessment->mainListEligible && $ageHours >= $minAgeHours;
 
-        $mainEligible ? $result->mainListEligible++ : $result->riskWatch++;
+        $mainEligible ? $result->mainListEligible++ : $result->notMainListEligible++;
     }
 
     private function safeGoplus(Token $token, RiskScreeningRunResult $result): GoPlusSecurityLookup
