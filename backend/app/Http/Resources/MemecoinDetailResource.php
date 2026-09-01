@@ -7,6 +7,7 @@ namespace App\Http\Resources;
 use App\Models\Evidence;
 use App\Models\HistoricalPeakEvidence;
 use App\Models\MarketSnapshot;
+use App\Models\MonthlyRanking;
 use App\Models\PumpEvent;
 use App\Models\PumpExplanation;
 use App\Models\QualificationEvent;
@@ -130,6 +131,10 @@ class MemecoinDetailResource extends JsonResource
             // evidence-grounded syntheses (origin + popularity). Never triggers
             // research; `pending` when no report exists yet.
             'token_narrative' => $this->tokenNarrative(),
+
+            // Step 22 — the calendar months this token won as "Meme Champion".
+            // Read-only; `championships: []` when it has never won a month.
+            'monthly_champion' => $this->monthlyChampion(),
 
             // Step 24 — the deterministic risk assessment. Read-only; NEVER
             // triggers screening. `status: "pending"` when not yet screened.
@@ -264,6 +269,47 @@ class MemecoinDetailResource extends JsonResource
                 'source' => $event->source,
                 'market_cap_value' => $event->market_cap_value,
             ])->all(),
+        ];
+    }
+
+    /**
+     * The (month, chain-bucket) slots this token led as "Monthly Chain Champion"
+     * (Step 22, corrected).
+     *
+     * Read-only — the detail endpoint never recomputes a ranking. `is_champion`
+     * is a convenience flag; `championships` is newest-month first and carries
+     * the chain bucket + historical source/confidence. Never called "best
+     * investment" / "best return" / "safest coin".
+     *
+     * @return array<string,mixed>
+     */
+    private function monthlyChampion(): array
+    {
+        /** @var Collection<int, MonthlyRanking> $rankings */
+        $rankings = ($this->relationLoaded('monthlyRankings') ? $this->monthlyRankings : collect())
+            ->filter(fn ($r): bool => $r->token_id !== null
+                && in_array($r->status, MonthlyRanking::STATUSES_WITH_TOKEN, true));
+
+        return [
+            'is_champion' => $rankings->isNotEmpty(),
+            'championships' => $rankings->map(fn ($r): array => [
+                'year' => $r->year,
+                'month' => $r->month,
+                'month_name' => CarbonImmutable::create($r->year, $r->month, 1)->format('F'),
+                'chain_bucket' => $r->chain_bucket,
+                'status' => $r->status,
+                'performance_score' => $r->performance_score,
+                'market_cap_growth_pct' => $r->market_cap_growth_pct,
+                'baseline_market_cap' => $r->baseline_market_cap,
+                'peak_market_cap' => $r->peak_market_cap,
+                'observation_coverage_ratio' => $r->observation_coverage_ratio,
+                'source_type' => $r->source_type,
+                'source_reference' => $r->source_reference,
+                'source_evidence' => $r->source_evidence ?? [],
+                'age_uncertain' => (bool) $r->age_uncertain,
+                'confidence' => $r->confidence,
+                'finalized_at' => $r->finalized_at?->toIso8601String(),
+            ])->values()->all(),
         ];
     }
 

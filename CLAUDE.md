@@ -102,7 +102,7 @@ memecoin-detector/
 │   │   ├── api/         memecoins.ts, memecoinDetail.ts (Laravel only)
 │   │   ├── types/       memecoin.ts, memecoinDetail.ts
 │   │   ├── lib/         format.ts ($74.6M / 8d / % / timestamps)
-│   │   ├── components/  MemecoinTable, ChainFilter, CopyAddress, MarketCapSparkline, RecentlyCrossedSection, TokenNarrativeSection
+│   │   ├── components/  MemecoinTable, ChainFilter, CopyAddress, MarketCapSparkline, RecentlyCrossedSection, TokenNarrativeSection, MonthlyChampions, RiskChip, RiskWatchSection
 │   │   ├── pages/       Dashboard.tsx, MemecoinDetail.tsx
 │   │   └── App.tsx      React Router: / and /memecoin/:chainId/:tokenAddress
 │   ├── vite.config.ts  host: true, port 5180
@@ -356,9 +356,10 @@ next sprint.
 ## Domain model
 
 `Token`, `MarketSnapshot`, `IngestionRun`, `HistoricalPeakEvidence`, `PumpEvent`,
-`Evidence`, `PumpExplanation`, `QualificationEvent`, `TokenNarrativeReport` and
-`TokenNarrativeSource` exist as tables. The rest are documented for naming
-consistency only — do **not** create them yet.
+`Evidence`, `PumpExplanation`, `QualificationEvent`, `TokenNarrativeReport`,
+`TokenNarrativeSource`, `MonthlyRanking`, `RiskAssessment` and `RiskSignal` exist
+as tables. The rest are documented for naming consistency only — do **not**
+create them yet.
 
 | Concept          | Meaning | Status |
 | ---------------- | ------- | ------ |
@@ -375,7 +376,9 @@ consistency only — do **not** create them yet.
 | `QualificationEvent` | One "$5M crossing" per token per `type` (Step 20) — `type` (`CURRENT_OBSERVATION`/`HISTORICAL_VERIFIED`), `crossed_at` (earliest snapshot ≥ $5M, or earliest CoinGecko-verified ≥ $5M point — candled, never a tick), `threshold_usd`, `evidence_status`, `source` (`dexscreener`/`coingecko`), `market_cap_value`. **Unique on `(token_id, type)`** → idempotent scheduler re-runs; `crossed_at` never rewritten. `HISTORICAL_ESTIMATE`/`UNKNOWN` produce NO event. Only a verified/observed peak in `[$5M, $200M]` gets one. A token can hold both types; representative = `HISTORICAL_VERIFIED` > `CURRENT_OBSERVATION` (the other row preserved). Written ONLY by the pipeline (`QualificationEventRecorder`) — never a read API, never a snapshot scan on GET. `belongsTo Token` / `Token hasMany`. See [docs/qualification-events.md](docs/qualification-events.md). | **implemented (Step 20)** |
 | `TokenNarrativeReport` | One token-level narrative synthesis per token (Step 21) — `origin_status` / `origin_summary` / `origin_explanation_json` (why created) + `popularity_status` / `popularity_summary` / `popularity_explanation_json` (why popular) + `overall_status` (`pending`/`completed`/`partial`/`failed`) / `overall_confidence` / `research_started_at` / `research_completed_at` / `generated_at` / `model_provider` / `model_name` / `research_providers_used` / `error_message` (concise, no traces). **Unique on `token_id`.** The AI INTERPRETS collected sources + our stored `Evidence` / market history — never browses, never invents sources/URLs/dates, never asserts creator intent, never causality-from-timing; every claim cites `token_narrative_sources.id`. Each section validated independently → one can be `completed` while the other `failed` (overall `partial`). Written ONLY by `memecoins:research-narratives`. `belongsTo Token` / `hasMany TokenNarrativeSource`. See [docs/token-narrative-intelligence.md](docs/token-narrative-intelligence.md). | **implemented (Step 21)** |
 | `TokenNarrativeSource` | One concise source behind a narrative report (Step 21) — `section` (`origin`/`popularity`), `source_type` (`official`/`news`/`social`/`market`/`community`/`reference`), `source_name`, `source_url`, `title`, `published_at` (real or **null**, never fabricated), `accessed_at`, `claim` (one sentence), `relevance_score`, `confidence` (quality tier), `provider`. Metadata + claim only — **never a scraped page body**. `unique(token_narrative_report_id, dedupe_hash)` → idempotent re-research. Persisted BEFORE the AI call. `belongsTo TokenNarrativeReport` + `belongsTo Token`. | **implemented (Step 21)** |
-| `MonthlyRanking` | Preserved Top-N leaders for a calendar month. | future |
+| `RiskAssessment` | One CURRENT deterministic risk assessment per token (Step 24) — **unique on `token_id`**, upserted/re-evaluable. `risk_level` (`LOWER`/`MEDIUM`/`HIGH`/`CRITICAL`/`UNKNOWN` — `UNKNOWN` = "insufficient security data", NEVER "high" and NEVER "safe"), `risk_score` (deterministic 0–100, higher = more risk, **NOT** a probability of scam/rug/loss), `data_completeness` (measured/applicable signals), `screening_status` (`completed`/`partial`/`failed`), `hard_override_signal` (the single flag that forced the level, else null — never hidden), `main_list_eligible` (risk screen passed — **excludes** the live ≥72h maturity gate), `screened_at`, `provider_version`. No provider payloads. Written ONLY by `memecoins:screen-risk`; never a read API. Layers ON TOP of market-cap qualification — never changes qualification / `observed_peak_market_cap` / pump events / evidence. `belongsTo Token` / `Token hasOne`. See [docs/risk-screening.md](docs/risk-screening.md). | **implemented (Step 24)** |
+| `RiskSignal` | One structured risk signal behind a `RiskAssessment` (Step 24) — `signal_group` (`contract_security`/`exit_safety`/`holder_distribution`/`liquidity`/`pump_dump`/`market_structure`/`age`), `state` (**TRI-STATE** `MEASURED`/`BAD`/`UNKNOWN` + `NOT_AVAILABLE`), `value` / `numeric_value` / `unit`, `severity`, `source` (`goplus`/`geckoterminal`/`dexscreener`/`internal`), `source_checked_at`, `explanation` (**pre-written**, never LLM-generated). `unique(risk_assessment_id, signal_key)`; the full set is REPLACED on every rescan. `UNKNOWN` (null/`""`/missing/unsupported chain) and `NOT_AVAILABLE` (top-trader data — never obtainable) contribute **0** to the score and are never read as "no". No payloads. `belongsTo RiskAssessment` + `belongsTo Token`. | **implemented (Step 24)** |
+| `MonthlyRanking` | One "Monthly Top Memecoin" per calendar month **per chain bucket** (Step 22, corrected) — **unique on `(year, month, chain_bucket)`**, at most one champion per bucket → ≤ 12×5 = 60 rows/year. `chain_bucket` = one of the FIVE fixed buckets `solana` / `robinhood` / `bsc` / `base` / `other` (`ChainBucket::forChain(chain_id)`; the token keeps its real `chain_id`, only this column ever says `"other"`; **no** global monthly winner, **no** unlimited chain rows). `status` (`provisional` current / `finalized` past w/ eligible winner+evidence / `best_supported_candidate` past w/ a real but thinly-evidenced token / `no_verified_champion` past w/ no defensible winner, `token_id` null / `future`). `performance_score` (transparent 0–100, NOT a prediction), `baseline_market_cap` / `peak_market_cap` / `market_cap_growth_pct` / `peak_expansion_ratio` (from OBSERVED/VERIFIED month snapshots only — never FDV/estimate), `activity_score` (supporting, 15%), `observation_count` / `observation_coverage_ratio` (< `MEMECOIN_MONTHLY_MIN_OBSERVATION_COVERAGE` 0.25 → can't finalize), `scoring_breakdown` (json), **`source_type`** (`internal_observed` / `exact_dexscreener_rank` / `best_supported_historical_performer`) / **`source_reference`** / **`source_evidence`** (json — `[{name,url,claim,published_at,credibility}]`, Step 25) / **`age_uncertain`** (bool) / **`confidence`** (`high`/`medium`/`low`), plus **`champion_name`/`champion_symbol`/`champion_chain_id`/`champion_token_address`/`champion_image_url`** (Step 25 — a historically-researched champion NOT in our `tokens` table; `token_id` links a tracked `Token` only), `finalized_at`, `computed_at`. Champion of a bucket = the single eligible memecoin **in that bucket** with the strongest SUPPORTED performance by **market-cap growth** (baseline→peak) — NOT biggest / highest-cap / most-liquid / first-to-$5M. **Risk score and AI are NEVER used to select the winner** (also for historical). Eligibility = Step 19 universe (or, for historical, $5M–$200M **MARKET CAP** never FDV) + age ≤ 30d + month peak in `[$5M, $200M]` + volume/liquidity > 0 + belongs to the bucket. Written ONLY by `memecoins:finalize-monthly-champion` (daily, deterministic, internal only) + `memecoins:research-monthly-champions` (on-demand, Step 25 — historical backfill from operator-verified researched sources); a settled past row is immutable without `--force`; the GET API never recomputes and never researches. `belongsTo Token` / `Token hasMany`. See [docs/monthly-rankings.md](docs/monthly-rankings.md). | **implemented (Step 22 corrected · Step 25)** |
 
 ## Processing pipeline (concept)
 
@@ -428,6 +431,27 @@ In scope:
    never an estimate) and surface a **"Recently Crossed $5M"** dashboard section
    + detail-page qualification timeline. The $5M/$200M/age/volume/liquidity rules
    are unchanged.
+9. (Step 22 corrected · Step 25) **"Monthly Top Memecoins"** — for every calendar
+   month, the top-1 performer inside **each of FIVE fixed chain buckets** (solana
+   / robinhood / bsc / base / other), scored on market-cap growth within that
+   bucket's eligible universe (`monthly_rankings`, unique on
+   `(year, month, chain_bucket)`). `provisional` current / `finalized` /
+   `best_supported_candidate` / `no_verified_champion` / `future`. **Completed
+   past months before detector launch are backfilled from researched historical
+   sources** (`memecoins:research-monthly-champions`, on-demand, operator-curated
+   seed file) — with `source_type` / `source_evidence[]` / `age_uncertain` /
+   `confidence`, an exact DexScreener rank only when a source establishes it,
+   incomplete evidence → `best_supported_candidate` / `no_verified_champion`,
+   never fabricated. Never a global winner, never risk score, never AI. Homepage
+   12-month grid (5 buckets per card + chain filter) + detail-page section.
+10. (Step 24) **Risk & Safety Screening** — a conservative, deterministic risk
+    screen LAYERED ON TOP of the market-cap qualification (`risk_assessments` /
+    `risk_signals`, written by `memecoins:screen-risk`). MAIN LIST
+    (`GET /api/memecoins`) now = market-cap qualified AND age ≥ 72h AND
+    LOWER/MEDIUM risk AND enough security data AND no hard safety filter;
+    everything else qualified goes to **RISK WATCH**
+    (`GET /api/memecoins/risk-watch`) — visible, flagged, never hidden. RISK ≠
+    SAFETY. No AI. Market-cap qualification is unchanged.
 
 Same pipeline runs two ways — HTTP `GET /api/memecoins/discover` (`trigger=manual`)
 and the scheduled command `php artisan memecoins:discover` (`trigger=scheduled`,
@@ -443,10 +467,10 @@ synchronous execution. Details:
 
 Explicitly **excluded** from Sprint 1:
 
-- AI pump explanations
+- AI pump explanations *(later implemented — Step 16C)*
 - Related-token graph
 - Social sentiment
-- Historical monthly rankings
+- Historical monthly rankings *(later implemented — Step 22, "Monthly Meme Champions")*
 - Notifications
 - Portfolio management
 - Trading execution
@@ -567,8 +591,14 @@ Explicitly **excluded** from Sprint 1:
   peak rule. Rows carry `status` `ACTIVE` (current MC ≥ $5M) / `COOLED` (< $5M) —
   never alarmist. `config('dexscreener.recent_crossing.*')`.
 - **Detail API `GET /api/memecoins/{chainId}/{tokenAddress}`** — read-only,
-  PostgreSQL only, never calls DexScreener / CoinGecko / GeckoTerminal. Identity
-  is `(chain_id, token_address)`, never the symbol. **Nested response** (Step 15):
+  PostgreSQL only, never calls DexScreener / CoinGecko / GeckoTerminal / GoPlus.
+  Identity is `(chain_id, token_address)`, never the symbol. Step 24 adds
+  **`risk_assessment`** (`status` `pending`/`completed`/`partial`/`failed`,
+  `risk_level`, `risk_score`, `data_completeness`, `screened_at`,
+  `hard_override_signal`, grouped `signals[]` each with tri-state
+  `state`/`severity`/`source`/`source_checked_at`, `disclaimer`); `status:
+  "pending"` when unscreened; NEVER triggers screening, never leaks a provider
+  error. **Nested response** (Step 15):
   `qualification` (MAIN-LIST qualification — `qualified` bool + `peak_value` = a
   verified/observed market cap, `null` for `HISTORICAL_ESTIMATE`/`UNKNOWN`/
   above-ceiling; `ineligible_reason: "peak_above_ceiling"` when a verified/observed
@@ -588,13 +618,32 @@ Explicitly **excluded** from Sprint 1:
   qualification is NOT an existence gate** — any stored `Token` resolves. Miss →
   `404 {"error": "Memecoin not found."}`. ≤ 8 queries, no N+1.
 - **React dashboard** reads `GET /api/memecoins` + `GET /api/memecoins/recently-crossed`
-  only. **Two sections** (Step 20): **🔥 Recently Crossed $5M** (compact card
-  list — Token / Chain / Crossed / Current MC / Peak MC / `ACTIVE`|`COOLED`)
-  above the existing **30-Day Qualified Memecoins** table (chain filter, Sort
-  control Peak market cap / Recent crossing, Refresh + 60s auto-refresh,
-  loading/empty/error states, provenance notes). Rows link to the detail page;
-  each row has a copy-contract-address button and a compact
-  `CURRENT`/`VERIFIED`/`ESTIMATE` badge (unchanged). Never talks to DexScreener.
+  + `GET /api/memecoins/monthly-champions` + `GET /api/memecoins/risk-watch` only.
+  **Sections**: **🏆 Monthly Chain Champions** (Step 22 corrected · Step 25 —
+  calendar 3×4 grid, 2 cols tablet / 1 col mobile; each month card lists the FIVE
+  chain buckets Solana/Robinhood/BSC/Base/Other, each `🥇 $SYMBOL` + "+X% MC
+  growth" or a status label `Finalized`/`Best-supported`/`No verified champion`/
+  `No champion yet`, plus an `age uncertain` tag when applicable; a chain filter
+  `All Chains`/`Solana`/`Robinhood`/`BSC`/`Base`/`Other` narrows every card to
+  one bucket; single-bucket view shows peak MC + real `chain_id` + confidence +
+  source-type label; month status Provisional/Finalized/Upcoming; only a
+  **tracked** champion (in our `tokens` table) is a link — a historically-
+  backfilled champion is display-only; intro states plainly that pre-launch
+  months are researched, incomplete-evidence buckets say Best-supported / No
+  verified champion, never fabricated / never a claimed exact DexScreener rank) →
+  **🔥 Recently Crossed $5M** (Step 20 — compact card list Token / Chain / Crossed / Current
+  MC / Peak MC / `ACTIVE`|`COOLED`) → **🟢 Main Memecoin List** (Step 24 — the
+  former "30-Day Qualified" table: Token / Chain / Age / Current MC / Peak MC /
+  **Risk** (compact `LOWER`/`MEDIUM` chip + first `risk_summary` phrase) / 24h
+  Volume / Liquidity; chain filter, Sort control Peak market cap / Recent
+  crossing, Refresh + 60s auto-refresh, loading/empty/error states) → **⚠️ Risk
+  Watch** (Step 24 — market-cap-qualified tokens that FAIL the risk screen:
+  Token / Chain / Age / Current MC / Peak MC / **Risk** (`HIGH`/`CRITICAL`/`RISK
+  UNKNOWN` chip) / **Why flagged** (only-measured reason phrases); visible,
+  never hidden). Rows link to the detail page; each Main-list row keeps its
+  copy-contract-address button and `CURRENT`/`VERIFIED` badge. The risk chips
+  NEVER render "SAFE". Never talks to DexScreener / GoPlus / any security
+  provider.
 - **React token detail page** (`/memecoin/:chainId/:tokenAddress`, React Router)
   reads `GET /api/memecoins/{chainId}/{tokenAddress}` only (for data). Sections:
   header (middle-truncated CA + copy + back link), **live market chart** (Step 17
@@ -606,7 +655,24 @@ Explicitly **excluded** from Sprint 1:
   reach $5M"), **"Qualification timeline"** (Step 20 — Crossed $5M / Crossing
   type / MC at crossing / Current MC / Peak MC; below-$5M → "remains qualified
   because it previously crossed", never "currently above"; placeholder when none
-  recorded), **pump events** (Step 16A–C — timeline `started→peak` / MC % /
+  recorded), **"Monthly Chain Champion"** (Step 22 corrected · Step 25 — only
+  when a **tracked** token led a bucket: 🥇 &lt;Month&gt; &lt;Year&gt; —
+  &lt;Bucket&gt; #1, Finalized / Provisional / Best-supported candidate, chain
+  bucket, observed MC growth, baseline / peak MC, performance score, observation
+  coverage, historical source + confidence, "Trading age: Uncertain" when
+  applicable, and a **Sources** list (name + date + claim) for a
+  historically-backfilled champion; "not a best investment / best return /
+  safest coin"; non-`internal_observed`/non-`exact_dexscreener_rank` adds
+  "Best-supported monthly performer — not a 'Top DexScreener coin' claim"; a
+  best-supported candidate adds "not necessarily an exact DexScreener historical
+  rank"), **"Risk Assessment"**
+  (Step 24 — risk level chip (`LOWER`/`MEDIUM`/`HIGH`/`CRITICAL`/`RISK UNKNOWN`,
+  never "SAFE") / risk score / data completeness / last screened / hard-override
+  flag, then signal groups (Contract Security / Exit Safety / Holder
+  Distribution / Liquidity / Pump-Dump / Market Structure / Age) with ✅ / ⚠ / ❓
+  per signal, each expandable for source + checked time; "pending" placeholder
+  when unscreened; disclaimer "a heuristic filter, not a guarantee of safety"),
+  **pump events** (Step 16A–C — timeline `started→peak` / MC % /
   price % / detection score+confidence / status, each expands to the persisted
   AI "why did this coin pump?" explanation with expandable cited evidence;
   `pending`/`failed`/`UNKNOWN` show neutral notes, never a guessed reason),
@@ -719,7 +785,124 @@ Explicitly **excluded** from Sprint 1:
   triggers research, never leaks provider error detail**; `pending` with no
   report. `ANTHROPIC_API_KEY` server-side only. Config: `config/narrative.php`.
   Docs: `docs/token-narrative-intelligence.md`.
+- **Monthly Top Memecoins (Step 22, corrected)** — for EVERY calendar month, the
+  top-1 performer inside **each of FIVE fixed chain buckets**
+  (`solana`/`robinhood`/`bsc`/`base`/`other` — `ChainBucket::forChain(chain_id)`;
+  token keeps its real `chain_id`, only the row's `chain_bucket` says `"other"`).
+  `monthly_rankings` is **unique on `(year, month, chain_bucket)`** → ≤ 60 rows a
+  year. **No** global monthly winner. `php artisan memecoins:finalize-monthly-champion`
+  `[--year= --month=] [--chain=<bucket>] [--force]`, scheduled **daily** at
+  `00:20` (`withoutOverlapping(60)`; existing `scheduler` container) — no-arg run
+  = the safe daily pass: refresh the CURRENT month's 5 buckets (`provisional`) +
+  settle every not-yet-settled bucket of the previous completed month (so on
+  Sep 1 it settles all five **August** buckets, never September). Per-bucket
+  status: `provisional` / `finalized` (eligible winner + evidence) /
+  `best_supported_candidate` (a real but thinly-evidenced token) /
+  `no_verified_champion` (no defensible winner, `token_id` null — **never a
+  fabricated winner**) / `future`. Champion of a bucket = the single eligible
+  memecoin **in that bucket** that most strongly outperformed the others by
+  **observed market-cap growth** (baseline→peak within the month) — NOT biggest /
+  highest-cap / most-liquid / first-to-$5M. **Risk score and AI are NEVER used to
+  select the winner.** Unchanged deterministic formula
+  (`MonthlyPerformanceCalculator`: `score = 100·(0.60·growth + 0.25·expansion +
+  0.15·activity)`, capped-log, `config/ranking.php`; `MonthlyChampionSelector`
+  tie-break → lower `token_id`). Eligibility per bucket per month: Step 19
+  universe (CURRENT_OBSERVATION / HISTORICAL_VERIFIED peak in `[$5M, $200M]`; NOT
+  HISTORICAL_ESTIMATE / UNKNOWN; NOT FDV) + age ≤ 30d **per snapshot** + month
+  peak ≥ $5M + no month snapshot > $200M + volume/liquidity > 0 + coverage ≥ 0.25
+  + belongs to the bucket.
+- **Historical Monthly Champion Backfill (Step 25)** — for **completed past
+  months before the detector launched** (late Aug 2026),
+  **`memecoins:research-monthly-champions --year= --month= [--chain=] [--force]`**
+  (NOT scheduled — on demand, one month = 5 buckets or one bucket at a time,
+  progress output per bucket) actively researches external / historical market
+  sources instead of returning "no champion". `MonthlyChampionResearchService`:
+  **gather** from ordered providers (`MEMECOIN_MONTHLY_RESEARCH_PROVIDERS`
+  default `internal_observed,seed_file`) — `internal_observed` (our snapshots),
+  **`seed_file`** (operator-verified candidates JSON at
+  `MEMECOIN_MONTHLY_RESEARCH_SEED_PATH`, the bridge from **manual internet
+  research** — `{name,symbol,chain_id,token_address,baseline/peak MC,volume,
+  launch_date,age_uncertain,source_type,confidence,sources:[{name,url,claim,
+  published_at,credibility}],explanation}`, never auto-generated from snippets),
+  `web_research` (OFF-by-default automated stub) → **resolve identity** (name +
+  symbol + chain, ideally address — never symbol alone; declared bucket AND real
+  `chain_id` must both map to the bucket) → **validate** ($5M–$200M **MARKET
+  CAP** never FDV, right bucket, right month, ≤ 30-day trading age; unknown
+  launch date → `age_uncertain` + capped confidence, not dropped) → **rank**
+  (`MonthlyPerformanceCalculator::scoreHistorical`, same formula) → **classify**
+  `finalized` (≥ 2 strong sources + computable growth + known age, or a
+  source-established `exact_dexscreener_rank`) / `best_supported_candidate`
+  (derived baseline / single source / age uncertain) / `no_verified_champion`
+  (never fabricated). Confidence **capped at the operator's suggestion**.
+  **Never** claims an exact DexScreener rank without evidence, **never** invents
+  a candidate/URL/date, **never** scrapes SERPs, **never** reads the Risk
+  Assessment. A researched champion not in `tokens` stores identity denormalized
+  (`champion_*`); `tokens.chain_id` never mutated. Live Jan–Aug 2026 backfill
+  result: **CASHCAT** (Robinhood, July — chain launched Jul 1, first meme token,
+  ~$156M peak in its first trading week, corroborated by CoinDesk/Fortune/
+  crypto.news) is the one finalized external champion; every other past bucket
+  is honestly `no_verified_champion`. **`memecoins:finalize-monthly-champion`**
+  (daily) stays internal-only. Read API `GET /api/memecoins/monthly-champions?year=YYYY`
+  reads `monthly_rankings` only — **never recomputes / queries `market_snapshots`
+  / calls a provider / researches** — always **12** months, **each with all FIVE
+  buckets** (`champions.{solana,robinhood,bsc,base,other}`, never omitted;
+  synthesized `provisional`/`future`/`no_verified_champion` when no stored row);
+  each bucket entry adds `source_evidence[]` + `age_uncertain`. Denormalized
+  champions have `token.id = null` (display-only, no detail page). Detail API
+  `data.monthly_champion.championships[]` carries `chain_bucket` + `source_type`
+  + `source_evidence` + `age_uncertain` + `confidence` (tracked tokens only).
+  Config: `config/ranking.php`. Docs:
+  [docs/monthly-rankings.md](docs/monthly-rankings.md).
+- **Memecoin Risk & Safety Screening (Step 24)** — `php artisan memecoins:screen-risk`
+  `[--force] [--token=chain:address]`, scheduled `6,16,26,36,46,56 * * * *` (the
+  discovery cadence, offset AFTER discovery + historical qualification and
+  BEFORE the evidence offset; `withoutOverlapping(20)`; reuses the existing
+  `scheduler` container — no new container). A **conservative, deterministic**
+  risk screen **layered ON TOP OF** the market-cap qualification — it never
+  changes qualification / `observed_peak_market_cap` / pump events / evidence,
+  and **never uses AI**. `RiskScreeningService` (`app/Services/Risk/`) picks
+  market-cap-qualified tokens due for a (re)scan (per-token
+  `MEMECOIN_RISK_SCAN_COOLDOWN_HOURS`=6 + per-run `MEMECOIN_RISK_MAX_TOKENS_PER_RUN`=15),
+  fetches **GoPlus** (`token_security/{evm_id}` + `rugpull_detecting`; Solana
+  `solana/token_security` — different authority-model schema; free, no key,
+  optional `GOPLUS_APP_KEY` server-side only), **GeckoTerminal `/info`**
+  (holder buckets, Solana mint/freeze authority, honeypot — secondary), and
+  **DexScreener `/token-pairs/v1`** (liquidity structure — reuses
+  `DexScreenerClient`), runs `RiskSignalEvaluator` → `RiskScoreCalculator`
+  (`score = 100·Σ weight·clamp(Σ contributions)`; weights contract 0.30 / exit
+  safety 0.15 / holders 0.18 / liquidity 0.12 / pump-dump 0.12 / market
+  structure 0.08 / age 0.05; bands 25/50/75), and persists via
+  `RiskSnapshotRecorder`. **Level precedence:** a CRITICAL/HIGH hard-override
+  signal wins (recorded in `hard_override_signal`) → else
+  `data_completeness < MEMECOIN_RISK_MIN_DATA_COMPLETENESS` (0.50) or a
+  non-`completed` status ⇒ `RISK UNKNOWN` (distinct from HIGH) → else the score
+  band. **TRI-STATE:** `UNKNOWN`/`NOT_AVAILABLE` contribute 0 and are never read
+  as "no"; `owner_renounced=null` ≠ NO; `sell_tax=""` ≠ 0%; an unsupported chain
+  ⇒ contract-security UNKNOWN, **not** auto-HIGH. **`is_mintable` exception:**
+  explicit `true` ⇒ HIGH hard override (`MEMECOIN_RISK_MINTABLE_LEVEL`); UNKNOWN
+  is NOT claimed mintable and does NOT force HIGH (narrowed from the recon doc —
+  see risk-screening.md §11). Holder concentration excludes burn / LP-pair /
+  known-CEX / bridge / locker addresses before any figure. Pump-dump shape is
+  numeric only (our `market_snapshots` + `pump_events`; no images/vision).
+  Top-trader per-wallet data = `NOT_AVAILABLE`, never inferred. **MAIN LIST**
+  (`GET /api/memecoins`) = market-cap qualified **AND** age ≥
+  `MEMECOIN_MAIN_MIN_AGE_HOURS` (72h, applied live in-query) **AND**
+  `risk_level ∈ {LOWER, MEDIUM}` **AND** completeness OK **AND** no hard filter
+  — rows add `risk_level` / `risk_score` / `data_completeness` / `risk_summary`
+  (pre-written phrases). **RISK WATCH** (`GET /api/memecoins/risk-watch` — new,
+  PostgreSQL only) = market-cap qualified but fails the screen (HIGH / CRITICAL
+  / UNKNOWN / too young / hard filter), with `failed_signals[]` + pre-written
+  `reasons[]` — **visible, flagged, never hidden**. Detail API adds
+  `data.risk_assessment` (grouped `signals[]` with tri-state + source +
+  `checked_at`; `status: "pending"` when unscreened; never triggers screening,
+  never leaks a provider error). Read APIs **never** call a security provider.
+  **RISK ≠ SAFETY** — the product never displays "safe" / "guaranteed safe" /
+  "good investment" / "scam probability"; vocabulary is LOWER / MEDIUM / HIGH
+  RISK · CRITICAL — AVOID · RISK UNKNOWN · DISQUALIFIED. `config/risk.php`.
+  Docs: [docs/risk-screening.md](docs/risk-screening.md) +
+  [docs/memecoin-risk-reconnaissance.md](docs/memecoin-risk-reconnaissance.md).
 - Tables: `tokens`, `market_snapshots`, `ingestion_runs`,
   `historical_peak_evidences`, `pump_events`, `evidences`, `pump_explanations`,
-  `qualification_events`, `token_narrative_reports`, `token_narrative_sources`.
-  No queue / trend score / related-token graph / auth.
+  `qualification_events`, `token_narrative_reports`, `token_narrative_sources`,
+  `monthly_rankings`, `risk_assessments`, `risk_signals`. No queue / trend score
+  / related-token graph / auth.

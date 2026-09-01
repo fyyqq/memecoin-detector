@@ -163,3 +163,114 @@ export interface RiskWatchResponse {
     note: string
   }
 }
+
+// --- Step 22 (corrected): Monthly Top Memecoins -----------------------------
+
+/** The five fixed display buckets. `other` = every non-core chain. */
+export type ChainBucket = 'solana' | 'robinhood' | 'bsc' | 'base' | 'other'
+
+export const CHAIN_BUCKETS: ChainBucket[] = ['solana', 'robinhood', 'bsc', 'base', 'other']
+
+export const CHAIN_BUCKET_LABEL: Record<ChainBucket, string> = {
+  solana: 'Solana',
+  robinhood: 'Robinhood',
+  bsc: 'BSC',
+  base: 'Base',
+  other: 'Other',
+}
+
+/**
+ * Per-bucket status:
+ *   provisional              — current month, may still change
+ *   finalized                — past month, sufficient internal evidence
+ *   best_supported_candidate — past month, a real token led but evidence is thin
+ *   no_verified_champion     — past month, no defensible winner
+ *   future                   — the month has not happened yet
+ */
+export type MonthlyBucketStatus =
+  | 'provisional'
+  | 'finalized'
+  | 'best_supported_candidate'
+  | 'no_verified_champion'
+  | 'future'
+
+/** Month-level status. */
+export type MonthlyMonthStatus = 'provisional' | 'finalized' | 'future'
+
+export type MonthlySourceType =
+  | 'internal_observed'
+  | 'exact_dexscreener_rank'
+  | 'best_supported_historical_performer'
+  | 'dexscreener'
+  | 'web_research'
+  | 'other_verified_source'
+
+/** One research source behind a historically-backfilled champion (Step 25). */
+export interface MonthlySourceEvidence {
+  name: string
+  url: string | null
+  claim: string
+  published_at: string | null
+  credibility?: string
+}
+
+export interface MonthlyChampionPerformance {
+  /** Transparent 0–100 performance score. NOT a prediction of returns. */
+  score: number | null
+  baseline_market_cap: number | null
+  peak_market_cap: number | null
+  market_cap_growth_pct: number | null
+  peak_expansion_ratio: number | null
+  activity_score: number | null
+  observation_count: number | null
+  observation_coverage_ratio: number | null
+}
+
+export interface MonthlyChampionBucket {
+  chain_bucket: ChainBucket
+  status: MonthlyBucketStatus
+  token: {
+    id: number
+    symbol: string | null
+    name: string | null
+    /** The token's real chain. */
+    chain_id: string
+    /** The display bucket (may be "other"). */
+    chain_bucket: ChainBucket
+    token_address: string
+    image_url: string | null
+  } | null
+  performance: MonthlyChampionPerformance | null
+  source_type: MonthlySourceType | null
+  source_reference: string | null
+  /** Research provenance for a historically-backfilled champion. `[]` otherwise. */
+  source_evidence: MonthlySourceEvidence[]
+  /** The 30-day trading-age window could not be established from evidence. */
+  age_uncertain: boolean
+  confidence: 'high' | 'medium' | 'low' | null
+  finalized_at: string | null
+  computed_at: string | null
+}
+
+export interface MonthlyChampionMonth {
+  year: number
+  month: number
+  month_name: string
+  status: MonthlyMonthStatus
+  /** ALWAYS all five buckets, in canonical order. Never omitted. */
+  champions: Record<ChainBucket, MonthlyChampionBucket>
+}
+
+export interface MonthlyChampionsResponse {
+  data: MonthlyChampionMonth[]
+  meta: {
+    year: number
+    count: number
+    current_year: number
+    current_month: number
+    buckets: ChainBucket[]
+    retrieved_at: string
+    source: string
+    selection_note: string
+  }
+}

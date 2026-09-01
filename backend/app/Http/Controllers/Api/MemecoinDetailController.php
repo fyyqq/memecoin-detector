@@ -52,6 +52,7 @@ class MemecoinDetailController extends Controller
                 'historicalPeakEvidence',
                 'qualificationEvents',
                 'narrativeReport.sources',
+                'monthlyRankings' => fn ($q) => $q->orderByDesc('year')->orderByDesc('month'),
                 'riskAssessment.signals',
             ])
             ->first();

@@ -2,14 +2,24 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   API_BASE_URL,
   fetchMemecoins,
+  fetchMonthlyChampions,
   fetchRecentlyCrossed,
+  fetchRiskWatch,
   MemecoinApiError,
 } from '../api/memecoins'
 import { ChainFilter } from '../components/ChainFilter'
 import { MemecoinTable } from '../components/MemecoinTable'
+import { MonthlyChampions } from '../components/MonthlyChampions'
 import { RecentlyCrossedSection } from '../components/RecentlyCrossedSection'
+import { RiskWatchSection } from '../components/RiskWatchSection'
 import { formatDateTime, formatUsd } from '../lib/format'
-import type { MemecoinListResponse, MemecoinSort, RecentlyCrossedResponse } from '../types/memecoin'
+import type {
+  MemecoinListResponse,
+  MemecoinSort,
+  MonthlyChampionsResponse,
+  RecentlyCrossedResponse,
+  RiskWatchResponse,
+} from '../types/memecoin'
 
 type Status = 'loading' | 'ready' | 'error'
 
@@ -32,8 +42,18 @@ export function Dashboard() {
   const [crossedLoading, setCrossedLoading] = useState(true)
   const [crossedError, setCrossedError] = useState('')
 
+  const [champions, setChampions] = useState<MonthlyChampionsResponse | null>(null)
+  const [championsLoading, setChampionsLoading] = useState(true)
+  const [championsError, setChampionsError] = useState('')
+
+  const [riskWatch, setRiskWatch] = useState<RiskWatchResponse | null>(null)
+  const [riskWatchLoading, setRiskWatchLoading] = useState(true)
+  const [riskWatchError, setRiskWatchError] = useState('')
+
   const abortRef = useRef<AbortController | null>(null)
   const crossedAbortRef = useRef<AbortController | null>(null)
+  const championsAbortRef = useRef<AbortController | null>(null)
+  const riskWatchAbortRef = useRef<AbortController | null>(null)
 
   const load = useCallback(async (nextChain: string, nextSort: MemecoinSort) => {
     abortRef.current?.abort()
@@ -80,6 +100,46 @@ export function Dashboard() {
     }
   }, [])
 
+  const loadChampions = useCallback(async () => {
+    championsAbortRef.current?.abort()
+    const controller = new AbortController()
+    championsAbortRef.current = controller
+    setChampionsLoading(true)
+
+    try {
+      const data = await fetchMonthlyChampions(undefined, controller.signal)
+      setChampions(data)
+      setChampionsError('')
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') return
+      setChampionsError(
+        error instanceof MemecoinApiError ? error.message : 'Unable to load monthly champions.',
+      )
+    } finally {
+      if (championsAbortRef.current === controller) setChampionsLoading(false)
+    }
+  }, [])
+
+  const loadRiskWatch = useCallback(async (nextChain: string) => {
+    riskWatchAbortRef.current?.abort()
+    const controller = new AbortController()
+    riskWatchAbortRef.current = controller
+    setRiskWatchLoading(true)
+
+    try {
+      const data = await fetchRiskWatch(nextChain || undefined, controller.signal)
+      setRiskWatch(data)
+      setRiskWatchError('')
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') return
+      setRiskWatchError(
+        error instanceof MemecoinApiError ? error.message : 'Unable to load risk watch.',
+      )
+    } finally {
+      if (riskWatchAbortRef.current === controller) setRiskWatchLoading(false)
+    }
+  }, [])
+
   // Sync the UI with the API on mount and whenever the filter / sort changes.
   useEffect(() => {
     // oxlint-disable-next-line react/set-state-in-effect
@@ -91,19 +151,32 @@ export function Dashboard() {
     void loadCrossed()
   }, [loadCrossed])
 
+  useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect
+    void loadChampions()
+  }, [loadChampions])
+
+  useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect
+    void loadRiskWatch(chain)
+  }, [chain, loadRiskWatch])
+
   // Gentle auto-refresh — one call per minute per feed, no aggressive polling.
   useEffect(() => {
     const timer = window.setInterval(() => {
       void load(chain, sort)
       void loadCrossed()
+      void loadRiskWatch(chain)
     }, AUTO_REFRESH_MS)
     return () => window.clearInterval(timer)
-  }, [chain, sort, load, loadCrossed])
+  }, [chain, sort, load, loadCrossed, loadRiskWatch])
 
   useEffect(
     () => () => {
       abortRef.current?.abort()
       crossedAbortRef.current?.abort()
+      championsAbortRef.current?.abort()
+      riskWatchAbortRef.current?.abort()
     },
     [],
   )
@@ -118,6 +191,7 @@ export function Dashboard() {
   const refreshAll = () => {
     void load(chain, sort)
     void loadCrossed()
+    void loadRiskWatch(chain)
   }
 
   return (
@@ -135,6 +209,14 @@ export function Dashboard() {
         </div>
       </header>
 
+      <MonthlyChampions
+        months={champions?.data ?? []}
+        year={champions?.meta.year ?? new Date().getUTCFullYear()}
+        loading={championsLoading}
+        error={championsError}
+        onRetry={() => void loadChampions()}
+      />
+
       <RecentlyCrossedSection
         rows={crossed?.data ?? []}
         hours={recentHours}
@@ -145,7 +227,7 @@ export function Dashboard() {
 
       <section className="qualified-list">
         <div className="section-heading">
-          <h2>30-Day Qualified Memecoins</h2>
+          <h2>🟢 Main Memecoin List</h2>
           <label className="sort-control">
             Sort
             <select
@@ -180,7 +262,20 @@ export function Dashboard() {
         )}
 
         {status === 'ready' && rows.length > 0 && <MemecoinTable rows={rows} />}
+
+        <p className="muted">
+          Main-list tokens are market-cap qualified <em>and</em> pass a conservative risk screen
+          (mature enough, lower/medium risk, enough security data, no hard safety failure). This is
+          a risk filter, not a guarantee of safety.
+        </p>
       </section>
+
+      <RiskWatchSection
+        rows={riskWatch?.data ?? []}
+        loading={riskWatchLoading}
+        error={riskWatchError}
+        onRetry={() => void loadRiskWatch(chain)}
+      />
 
       <footer className="provenance">
         <p>
@@ -195,8 +290,9 @@ export function Dashboard() {
         </p>
         <p className="muted">
           The dashboard reads persisted observations from this app&rsquo;s API
-          (<code>{API_BASE_URL}/api/memecoins</code> and{' '}
-          <code>/api/memecoins/recently-crossed</code>). It never calls DexScreener directly.
+          (<code>{API_BASE_URL}/api/memecoins</code>, <code>/api/memecoins/recently-crossed</code>,{' '}
+          <code>/api/memecoins/risk-watch</code> and <code>/api/memecoins/monthly-champions</code>).
+          It never calls DexScreener, GoPlus or any security provider directly.
         </p>
       </footer>
     </main>

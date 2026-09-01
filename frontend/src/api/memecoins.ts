@@ -1,6 +1,7 @@
 import type {
   MemecoinListResponse,
   MemecoinQuery,
+  MonthlyChampionsResponse,
   RecentlyCrossedResponse,
   RiskWatchResponse,
 } from '../types/memecoin'
@@ -49,6 +50,24 @@ export async function fetchRecentlyCrossed(
   }`
 
   return getJson<RecentlyCrossedResponse>(url, signal)
+}
+
+/**
+ * Fetch the "Monthly Meme Champions" grid for a year. Laravel-only — reads
+ * `monthly_rankings` only, never recomputes, never calls a provider. Always 12
+ * entries (January … December).
+ */
+export async function fetchMonthlyChampions(
+  year?: number,
+  signal?: AbortSignal,
+): Promise<MonthlyChampionsResponse> {
+  const params = new URLSearchParams()
+  if (year) params.set('year', String(year))
+  const url = `${API_BASE_URL}/api/memecoins/monthly-champions${
+    params.toString() ? `?${params}` : ''
+  }`
+
+  return getJson<MonthlyChampionsResponse>(url, signal)
 }
 
 /**
