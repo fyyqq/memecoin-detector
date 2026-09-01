@@ -10,6 +10,8 @@ use App\Models\MarketSnapshot;
 use App\Models\PumpEvent;
 use App\Models\PumpExplanation;
 use App\Models\QualificationEvent;
+use App\Models\RiskAssessment;
+use App\Models\RiskSignal;
 use App\Models\Token;
 use App\Models\TokenNarrativeReport;
 use App\Models\TokenNarrativeSource;
@@ -128,6 +130,11 @@ class MemecoinDetailResource extends JsonResource
             // evidence-grounded syntheses (origin + popularity). Never triggers
             // research; `pending` when no report exists yet.
             'token_narrative' => $this->tokenNarrative(),
+
+            // Step 24 — the deterministic risk assessment. Read-only; NEVER
+            // triggers screening. `status: "pending"` when not yet screened.
+            // Never uses the word "safe".
+            'risk_assessment' => $this->riskAssessment(),
 
             'provenance' => [
                 'data_source' => 'dexscreener',
@@ -508,6 +515,67 @@ class MemecoinDetailResource extends JsonResource
             ])
             ->values()
             ->all();
+    }
+
+    /**
+     * The Step 24 deterministic risk assessment.
+     *
+     * Read-only — NEVER triggers screening. `status: "pending"` when the token
+     * has not been screened yet. Signals are grouped; each carries its
+     * tri-state (`MEASURED` / `BAD` / `UNKNOWN` / `NOT_AVAILABLE`), severity,
+     * source and checked-at time so the UI can show exactly which fields were
+     * unavailable. No provider error detail is ever exposed. Never "safe".
+     *
+     * @return array<string,mixed>
+     */
+    private function riskAssessment(): array
+    {
+        /** @var RiskAssessment|null $assessment */
+        $assessment = $this->relationLoaded('riskAssessment') ? $this->riskAssessment : null;
+
+        if ($assessment === null) {
+            return [
+                'status' => 'pending',
+                'risk_level' => null,
+                'risk_score' => null,
+                'data_completeness' => null,
+                'screened_at' => null,
+                'hard_override_signal' => null,
+                'main_list_eligible' => false,
+                'signals' => [],
+                'disclaimer' => 'Risk screening is a heuristic filter, not a guarantee of safety. It is not investment advice.',
+            ];
+        }
+
+        /** @var Collection<int, RiskSignal> $signals */
+        $signals = $assessment->relationLoaded('signals') ? $assessment->signals : collect();
+
+        return [
+            'status' => $assessment->screening_status,
+            'risk_level' => $assessment->risk_level,
+            'risk_score' => $assessment->risk_score,
+            'data_completeness' => round((float) $assessment->data_completeness, 3),
+            'screened_at' => $assessment->screened_at?->toIso8601String(),
+            'provider_version' => $assessment->provider_version,
+            'hard_override_signal' => $assessment->hard_override_signal,
+            'main_list_eligible' => (bool) $assessment->main_list_eligible,
+            'signals' => $signals
+                ->sortBy(['signal_group', 'signal_key'])
+                ->map(fn (RiskSignal $s): array => [
+                    'group' => $s->signal_group,
+                    'key' => $s->signal_key,
+                    'state' => $s->state,
+                    'value' => $s->value,
+                    'unit' => $s->unit,
+                    'severity' => $s->severity,
+                    'source' => $s->source,
+                    'source_checked_at' => $s->source_checked_at?->toIso8601String(),
+                    'explanation' => $s->explanation,
+                ])
+                ->values()
+                ->all(),
+            'disclaimer' => 'Risk screening is a heuristic filter, not a guarantee of safety. It is not investment advice.',
+        ];
     }
 
     /**

@@ -12,10 +12,12 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 use PHPUnit\Framework\Attributes\Test;
+use Tests\Concerns\CreatesRiskAssessments;
 use Tests\TestCase;
 
 class MemecoinListTest extends TestCase
 {
+    use CreatesRiskAssessments;
     use RefreshDatabase;
 
     private CarbonImmutable $now;
@@ -77,6 +79,10 @@ class MemecoinListTest extends TestCase
             'primary_dex_id' => 'raydium',
             'earliest_pair_created_at' => $this->now->subDays(10),
         ], $snapshot));
+
+        // Step 24 — a MAIN LIST token is now also a risk-screen-passing token.
+        // Tests exercising the risk gate itself override this.
+        $this->passRisk($model);
 
         return $model->refresh();
     }

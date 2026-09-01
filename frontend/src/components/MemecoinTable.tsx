@@ -1,13 +1,18 @@
 import { useNavigate } from 'react-router-dom'
 import type { Memecoin } from '../types/memecoin'
-import { formatAgeDays, formatDateTime, formatRelativeTime, formatUsd } from '../lib/format'
+import { formatAgeDays, formatUsd } from '../lib/format'
 import { CopyAddress } from './CopyAddress'
 import { QualificationBadge } from './QualificationBadge'
+import { RiskChip } from './RiskChip'
 
 interface MemecoinTableProps {
   rows: Memecoin[]
 }
 
+/**
+ * The "🟢 Main Memecoin List" (Step 24) — market-cap qualified AND
+ * lower/medium-risk. HIGH / CRITICAL / RISK UNKNOWN tokens are on Risk Watch.
+ */
 export function MemecoinTable({ rows }: MemecoinTableProps) {
   const navigate = useNavigate()
 
@@ -25,12 +30,10 @@ export function MemecoinTable({ rows }: MemecoinTableProps) {
             <th>Chain</th>
             <th className="num">Age</th>
             <th className="num">Current MC</th>
-            <th className="num">Observed Peak MC</th>
-            <th>Peak observed</th>
+            <th className="num">Peak MC</th>
+            <th>Risk</th>
             <th className="num">24h Volume</th>
             <th className="num">Liquidity</th>
-            <th>DEX</th>
-            <th>Last observed</th>
           </tr>
         </thead>
         <tbody>
@@ -61,15 +64,16 @@ export function MemecoinTable({ rows }: MemecoinTableProps) {
               <td className="num">{formatAgeDays(row.age_days)}</td>
               <td className="num">{formatUsd(row.current_market_cap)}</td>
               <td className="num strong">{formatUsd(row.observed_peak_market_cap)}</td>
-              <td title={row.observed_peak_market_cap_at ?? undefined}>
-                {formatDateTime(row.observed_peak_market_cap_at)}
+              <td>
+                <RiskChip level={row.risk_level} score={row.risk_score} />
+                {row.risk_summary.length > 0 && (
+                  <span className="risk-summary" title={row.risk_summary.join(' · ')}>
+                    {row.risk_summary[0]}
+                  </span>
+                )}
               </td>
               <td className="num">{formatUsd(row.volume_h24)}</td>
               <td className="num">{formatUsd(row.liquidity_usd)}</td>
-              <td>{row.primary_dex_id ?? '—'}</td>
-              <td title={row.last_observed_at ?? undefined}>
-                {formatRelativeTime(row.last_observed_at)}
-              </td>
             </tr>
           ))}
         </tbody>

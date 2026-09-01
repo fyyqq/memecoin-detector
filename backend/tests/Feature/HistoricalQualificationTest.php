@@ -14,6 +14,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 use PHPUnit\Framework\Attributes\Test;
+use Tests\Concerns\CreatesRiskAssessments;
 use Tests\TestCase;
 
 /**
@@ -22,6 +23,7 @@ use Tests\TestCase;
  */
 class HistoricalQualificationTest extends TestCase
 {
+    use CreatesRiskAssessments;
     use RefreshDatabase;
 
     private CarbonImmutable $now;
@@ -81,6 +83,9 @@ class HistoricalQualificationTest extends TestCase
             'observed_peak_market_cap' => 1_000_000.0,
             'observed_peak_market_cap_at' => $this->now->subHours(6),
         ], $overrides));
+
+        // Step 24 — decouple the read-API assertions here from the risk gate.
+        $this->passRisk($token);
 
         return $token;
     }

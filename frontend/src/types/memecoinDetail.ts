@@ -315,6 +315,51 @@ export interface TokenNarrative {
   sources: NarrativeSource[]
 }
 
+// --- Step 24: Risk Assessment ------------------------------------------------
+
+export type RiskLevel = 'LOWER' | 'MEDIUM' | 'HIGH' | 'CRITICAL' | 'UNKNOWN'
+export type RiskSignalState = 'MEASURED' | 'BAD' | 'UNKNOWN' | 'NOT_AVAILABLE'
+export type RiskScreeningStatus = 'pending' | 'completed' | 'partial' | 'failed'
+
+export type RiskSignalGroup =
+  | 'contract_security'
+  | 'exit_safety'
+  | 'holder_distribution'
+  | 'liquidity'
+  | 'pump_dump'
+  | 'market_structure'
+  | 'age'
+
+export interface RiskSignal {
+  group: RiskSignalGroup
+  key: string
+  state: RiskSignalState
+  value: string | null
+  unit: string | null
+  severity: 'none' | 'low' | 'medium' | 'high' | 'critical'
+  source: string | null
+  source_checked_at: string | null
+  explanation: string | null
+}
+
+/**
+ * `data.risk_assessment` (Step 24) — deterministic risk screening. Read-only;
+ * NEVER triggers screening. `status: "pending"` when not yet screened. Never
+ * uses the word "safe".
+ */
+export interface RiskAssessment {
+  status: RiskScreeningStatus
+  risk_level: RiskLevel | null
+  risk_score: number | null
+  data_completeness: number | null
+  screened_at: string | null
+  provider_version?: string | null
+  hard_override_signal: string | null
+  main_list_eligible: boolean
+  signals: RiskSignal[]
+  disclaimer: string
+}
+
 /** `GET /api/memecoins/{chainId}/{tokenAddress}` → `data`. */
 export interface MemecoinDetail {
   id: number
@@ -339,6 +384,8 @@ export interface MemecoinDetail {
   pump_intelligence: MemecoinPumpIntelligence
   /** Token-level origin + popularity narrative intelligence (Step 21). */
   token_narrative: TokenNarrative
+  /** Deterministic risk screening (Step 24). */
+  risk_assessment: RiskAssessment
   provenance: MemecoinProvenance
 }
 

@@ -7,6 +7,8 @@ namespace App\Http\Resources;
 use App\Models\HistoricalPeakEvidence;
 use App\Models\MarketSnapshot;
 use App\Models\QualificationEvent;
+use App\Models\RiskAssessment;
+use App\Models\RiskSignal;
 use App\Models\Token;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\Request;
@@ -66,6 +68,12 @@ class MemecoinResource extends JsonResource
             'qualification_crossing_type' => $crossing['type'],
             'recently_crossed' => $crossing['recently_crossed'],
 
+            // Step 24 — the risk screen this row passed. Every MAIN LIST row is
+            // LOWER or MEDIUM risk (HIGH / CRITICAL / UNKNOWN are on RISK WATCH).
+            // "risk_summary" is a list of concise, pre-written phrases — never
+            // dynamically generated prose, and never the word "safe".
+            ...$this->riskFields(),
+
             'age_days' => $this->ageDays(),
 
             'liquidity_usd' => $snapshot?->liquidity_usd,
@@ -76,6 +84,46 @@ class MemecoinResource extends JsonResource
 
             'data_source' => 'dexscreener',
             'last_observed_at' => $this->last_observed_at?->toIso8601String(),
+        ];
+    }
+
+    /**
+     * Step 24 risk fields. A MAIN LIST row always has a completed assessment
+     * (the list query only returns risk-screen-passing tokens), but stay
+     * defensive.
+     *
+     * @return array{risk_level:?string,risk_score:?int,data_completeness:?float,risk_summary:list<string>}
+     */
+    private function riskFields(): array
+    {
+        /** @var RiskAssessment|null $assessment */
+        $assessment = $this->riskAssessment;
+
+        if ($assessment === null) {
+            return [
+                'risk_level' => null,
+                'risk_score' => null,
+                'data_completeness' => null,
+                'risk_summary' => [],
+            ];
+        }
+
+        $rank = ['critical' => 0, 'high' => 1, 'medium' => 2, 'low' => 3, 'none' => 4];
+
+        $summary = ($assessment->relationLoaded('signals') ? $assessment->signals : collect())
+            ->filter(fn (RiskSignal $s): bool => in_array($s->state, [RiskSignal::STATE_BAD, RiskSignal::STATE_MEASURED], true)
+                && in_array($s->severity, [RiskSignal::SEVERITY_MEDIUM, RiskSignal::SEVERITY_HIGH, RiskSignal::SEVERITY_CRITICAL], true))
+            ->sortBy(fn (RiskSignal $s): int => $rank[$s->severity] ?? 9)
+            ->take(3)
+            ->map(fn (RiskSignal $s): string => (string) $s->explanation)
+            ->values()
+            ->all();
+
+        return [
+            'risk_level' => $assessment->risk_level,
+            'risk_score' => $assessment->risk_score,
+            'data_completeness' => round((float) $assessment->data_completeness, 3),
+            'risk_summary' => $summary,
         ];
     }
 

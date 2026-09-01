@@ -14,6 +14,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 use PHPUnit\Framework\Attributes\Test;
+use Tests\Concerns\CreatesRiskAssessments;
 use Tests\TestCase;
 
 /**
@@ -28,6 +29,7 @@ use Tests\TestCase;
  */
 class TrendingMetaDiscoveryTest extends TestCase
 {
+    use CreatesRiskAssessments;
     use RefreshDatabase;
 
     private CarbonImmutable $now;
@@ -441,6 +443,9 @@ class TrendingMetaDiscoveryTest extends TestCase
         $token = Token::query()->firstOrFail();
         $this->assertSame(80_000_000.0, $token->observed_peak_market_cap);
 
+        // Step 24 — the MAIN LIST also requires a passing risk screen.
+        $this->passRisk($token);
+
         $this->getJson('/api/memecoins')->assertOk()
             ->assertJsonPath('meta.count', 1)
             ->assertJsonPath('data.0.current_market_cap', fn ($v) => (float) $v === 2_000_000.0)
@@ -482,6 +487,7 @@ class TrendingMetaDiscoveryTest extends TestCase
         $d = $this->diagnostics();
 
         $this->assertSame(1, $d['qualified']);
+        $this->passRisk(Token::query()->where('token_address', $addr)->firstOrFail());
         $this->getJson('/api/memecoins')->assertOk()->assertJsonPath('meta.count', 1);
     }
 

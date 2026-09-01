@@ -1139,3 +1139,267 @@
     color: #c7d2fe;
   }
 }
+
+/* --- Step 24: Risk & Safety Screening ------------------------------------- */
+
+.risk-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.08rem 0.45rem;
+  border-radius: 5px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+.risk-chip-score {
+  font-weight: 600;
+  opacity: 0.75;
+}
+
+.risk-chip-lower {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.risk-chip-medium {
+  background: #fef9c3;
+  color: #854d0e;
+}
+
+.risk-chip-high {
+  background: #ffedd5;
+  color: #9a3412;
+}
+
+.risk-chip-critical {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.risk-chip-unknown {
+  background: #e5e7eb;
+  color: #374151;
+}
+
+.risk-summary {
+  display: block;
+  margin-top: 0.2rem;
+  font-size: 0.68rem;
+  color: #6b7280;
+  max-width: 16rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.risk-watch .qualification {
+  color: #6b7280;
+}
+
+.risk-watch-reasons {
+  margin: 0;
+  padding-left: 1rem;
+  font-size: 0.72rem;
+  color: #6b7280;
+}
+
+.risk-watch-reasons li {
+  margin: 0.1rem 0;
+}
+
+.risk-card {
+  border: 1px solid #e5e7eb;
+  border-left-width: 4px;
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+  background: #f9fafb;
+}
+
+.risk-card-lower {
+  border-left-color: #16a34a;
+}
+
+.risk-card-medium {
+  border-left-color: #ca8a04;
+}
+
+.risk-card-high {
+  border-left-color: #ea580c;
+}
+
+.risk-card-critical {
+  border-left-color: #dc2626;
+}
+
+.risk-card-unknown {
+  border-left-color: #9ca3af;
+}
+
+.risk-card-head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin-bottom: 0.75rem;
+}
+
+.risk-headline-grid {
+  margin-top: 0.25rem;
+}
+
+.risk-hard-override {
+  margin: 0 0 0.75rem;
+  font-size: 0.8rem;
+  color: #9a3412;
+}
+
+.risk-unknown-note {
+  margin: 0 0 0.75rem;
+}
+
+.risk-group {
+  margin-top: 0.9rem;
+}
+
+.risk-group h3 {
+  font-size: 0.82rem;
+  margin: 0 0 0.35rem;
+  color: #374151;
+}
+
+.risk-signal-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.risk-signal-list > li {
+  border-top: 1px solid #eef0f3;
+}
+
+.risk-signal-list summary {
+  cursor: pointer;
+  padding: 0.35rem 0;
+  font-size: 0.78rem;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.risk-signal-key {
+  font-weight: 600;
+}
+
+.risk-signal-value {
+  color: #4b5563;
+}
+
+.risk-signal-state {
+  margin-left: auto;
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  padding: 0.02rem 0.3rem;
+  border-radius: 3px;
+  background: #e5e7eb;
+  color: #374151;
+}
+
+.risk-signal-state-bad {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.risk-signal-state-measured {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.risk-signal-state-unknown {
+  background: #e5e7eb;
+  color: #4b5563;
+}
+
+.risk-signal-body {
+  padding: 0 0 0.5rem 1.4rem;
+  font-size: 0.76rem;
+}
+
+.risk-disclaimer {
+  margin-top: 1rem;
+  font-size: 0.72rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  .risk-chip-lower {
+    background: #14532d;
+    color: #bbf7d0;
+  }
+
+  .risk-chip-medium {
+    background: #713f12;
+    color: #fde68a;
+  }
+
+  .risk-chip-high {
+    background: #7c2d12;
+    color: #fed7aa;
+  }
+
+  .risk-chip-critical {
+    background: #7f1d1d;
+    color: #fecaca;
+  }
+
+  .risk-chip-unknown {
+    background: #374151;
+    color: #d1d5db;
+  }
+
+  .risk-summary,
+  .risk-watch .qualification,
+  .risk-watch-reasons {
+    color: #9ca3af;
+  }
+
+  .risk-card {
+    background: #111827;
+    border-color: #374151;
+  }
+
+  .risk-group h3 {
+    color: #d1d5db;
+  }
+
+  .risk-signal-list > li {
+    border-top-color: #1f2937;
+  }
+
+  .risk-signal-value {
+    color: #9ca3af;
+  }
+
+  .risk-signal-state,
+  .risk-signal-state-unknown {
+    background: #374151;
+    color: #d1d5db;
+  }
+
+  .risk-signal-state-bad {
+    background: #7f1d1d;
+    color: #fecaca;
+  }
+
+  .risk-signal-state-measured {
+    background: #14532d;
+    color: #bbf7d0;
+  }
+
+  .risk-hard-override {
+    color: #fdba74;
+  }
+}

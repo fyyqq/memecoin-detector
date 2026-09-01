@@ -16,12 +16,16 @@ import {
   truncateMiddle,
 } from '../lib/format'
 import { basisLabel, confidenceLabel, sourceLabel, statusPresentation } from '../lib/qualification'
+import { RISK_SIGNAL_GROUP_LABELS, riskPresentation, signalStateIcon } from '../lib/risk'
+import { RiskChip } from '../components/RiskChip'
 import type {
   CitedEvidence,
   MemecoinDetail,
   MemecoinDetailResponse,
   PumpExplanation,
   PumpIntelligenceEvent,
+  RiskAssessment,
+  RiskSignal,
 } from '../types/memecoinDetail'
 
 type Status = 'loading' | 'ready' | 'error' | 'not-found'
@@ -217,6 +221,11 @@ function DetailView({ detail, retrievedAt }: DetailViewProps) {
       {/* 4b. QUALIFICATION TIMELINE */}
       <Section title="Qualification timeline">
         <QualificationTimeline detail={detail} />
+      </Section>
+
+      {/* 4d. RISK ASSESSMENT */}
+      <Section title="Risk Assessment">
+        <RiskAssessmentBlock risk={detail.risk_assessment} />
       </Section>
 
       {/* 5. PUMP EVENTS + EXPLANATIONS */}
@@ -455,6 +464,111 @@ function QualificationEvidence({ detail }: { detail: MemecoinDetail }) {
   )
 }
 
+function RiskAssessmentBlock({ risk }: { risk: RiskAssessment }) {
+  if (risk.status === 'pending' || !risk.risk_level) {
+    return (
+      <div className="placeholder-card">
+        <p className="placeholder-lead">This token has not been risk-screened yet.</p>
+        <p className="muted">
+          Risk screening runs on a schedule after discovery. {risk.disclaimer}
+        </p>
+      </div>
+    )
+  }
+
+  const p = riskPresentation(risk.risk_level)
+  const groups = groupSignals(risk.signals)
+
+  return (
+    <div className={`risk-card risk-card-${p.tone}`}>
+      <div className="risk-card-head">
+        <RiskChip level={risk.risk_level} />
+        <div className="detail-grid risk-headline-grid">
+          <Field label="Risk score">
+            {risk.risk_score != null ? `${risk.risk_score} / 100` : '—'}
+          </Field>
+          <Field label="Data completeness">
+            {risk.data_completeness != null ? `${Math.round(risk.data_completeness * 100)}%` : '—'}
+          </Field>
+          <Field label="Last screened">{show(risk.screened_at, formatDateTime)}</Field>
+          <Field label="Screening status">{risk.status}</Field>
+        </div>
+      </div>
+
+      {risk.hard_override_signal && (
+        <p className="risk-hard-override">
+          Level set by a hard safety filter: <code>{risk.hard_override_signal}</code>.
+        </p>
+      )}
+
+      {risk.risk_level === 'UNKNOWN' && (
+        <p className="muted risk-unknown-note">
+          Risk unknown — insufficient security data. This is <strong>not</strong> the same as HIGH
+          RISK, and it is not &ldquo;safe&rdquo;.
+        </p>
+      )}
+
+      {groups.map(([group, signals]) => (
+        <div key={group} className="risk-group">
+          <h3>{RISK_SIGNAL_GROUP_LABELS[group] ?? group}</h3>
+          <ul className="risk-signal-list">
+            {signals.map((sig) => (
+              <li key={sig.key}>
+                <details>
+                  <summary>
+                    <span aria-hidden="true">{signalStateIcon(sig.state)}</span>{' '}
+                    <span className="risk-signal-key">{humanizeKey(sig.key)}</span>
+                    {sig.value != null && <span className="risk-signal-value">{sig.value}</span>}
+                    <span className={`risk-signal-state risk-signal-state-${sig.state.toLowerCase()}`}>
+                      {sig.state}
+                    </span>
+                  </summary>
+                  <div className="risk-signal-body">
+                    {sig.explanation && <p>{sig.explanation}</p>}
+                    <p className="muted">
+                      Source: {sig.source ?? 'internal'}
+                      {sig.source_checked_at
+                        ? ` · checked ${formatDateTime(sig.source_checked_at)}`
+                        : ''}
+                      {sig.severity !== 'none' ? ` · severity: ${sig.severity}` : ''}
+                    </p>
+                  </div>
+                </details>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+
+      <p className="muted risk-disclaimer">{risk.disclaimer}</p>
+    </div>
+  )
+}
+
+function groupSignals(signals: RiskSignal[]): Array<[string, RiskSignal[]]> {
+  const order = [
+    'contract_security',
+    'exit_safety',
+    'holder_distribution',
+    'liquidity',
+    'pump_dump',
+    'market_structure',
+    'age',
+  ]
+  const byGroup = new Map<string, RiskSignal[]>()
+  for (const sig of signals) {
+    const list = byGroup.get(sig.group) ?? []
+    list.push(sig)
+    byGroup.set(sig.group, list)
+  }
+  return order
+    .filter((g) => byGroup.has(g))
+    .map((g) => [g, byGroup.get(g) as RiskSignal[]])
+}
+
+function humanizeKey(key: string): string {
+  return key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+}
 function crossingTypeLabel(type: string | null): string {
   switch (type) {
     case 'CURRENT_OBSERVATION':

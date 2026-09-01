@@ -6,48 +6,31 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Http\Resources\MemecoinResource;
-use App\Models\HistoricalPeakEvidence;
 use App\Models\Token;
+use App\Services\Risk\MainListDecision;
 use Carbon\CarbonImmutable;
-use Illuminate\Contracts\Database\Query\Builder;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
+use Illuminate\Support\Collection;
 
 class MemecoinListController extends Controller
 {
     /**
-     * GET /api/memecoins
+     * GET /api/memecoins — the MAIN LIST.
      *
-     * Read-only "30-Day Leaders" list, straight from PostgreSQL. This endpoint
-     * never calls DexScreener, CoinGecko or GeckoTerminal, never writes, never
-     * runs discovery — the scheduled `memecoins:discover` command is the only
-     * writer.
+     * Read-only, PostgreSQL only. Never calls DexScreener / CoinGecko /
+     * GeckoTerminal / GoPlus, never writes, never runs discovery or screening.
      *
-     * Qualified = age <= max_age_days AND a VERIFIED / OBSERVED market-cap peak
-     * that sits in [$5M, $200M]:
-     *   - the FLOOR is cleared by observed_peak_market_cap >= $5M
-     *     (CURRENT_OBSERVATION) or HISTORICAL_VERIFIED with
-     *     historical_peak_value >= $5M (CoinGecko-verified);
-     *   - the CEILING applies to the greatest verified/observed peak
-     *     (GREATEST(observed_peak, historical_peak_value)) <= $200M — a token
-     *     that ever printed a higher peak is excluded even if its current MC is
-     *     far lower.
+     * A row appears here only when it is BOTH:
+     *   1. market-cap qualified (Step 19 — age <= max_age_days AND a
+     *      VERIFIED / OBSERVED peak in [$5M, $200M]; HISTORICAL_ESTIMATE and
+     *      UNKNOWN never qualify); AND
+     *   2. it passes the Step 24 risk screen — mature enough
+     *      (>= MEMECOIN_MAIN_MIN_AGE_HOURS), risk_level in {LOWER, MEDIUM},
+     *      data completeness >= minimum, and no hard filter tripped.
      *
-     * A token whose CURRENT MC has dumped below $5M STAYS in the list if it
-     * already cleared the floor — the lower bound is a peak rule.
-     *
-     * HISTORICAL_ESTIMATE (FDV basis) and UNKNOWN are NOT returned — an
-     * estimated FDV is not a verified market cap. The estimate is still stored
-     * (`tokens.historical_estimate_fdv_usd` + `historical_peak_evidences`) and
-     * shown on the detail page as a clearly-labelled secondary signal.
-     *
-     * Default sort is by the qualifying market cap (observed or verified), desc
-     * — a stable leaderboard. `?sort=recent_crossing` re-orders by the token's
-     * representative "$5M crossing" timestamp, newest first (tokens with no
-     * recorded crossing last). The default is deliberately NOT recent_crossing:
-     * the dedicated "Recently Crossed $5M" section / endpoint already serves the
-     * recency view, and flipping the main leaderboard's order would disorient
-     * existing dashboard users.
+     * Everything that is market-cap qualified but fails (2) is on
+     * `GET /api/memecoins/risk-watch` — visible, flagged, never hidden.
      */
     public const SORT_PEAK_MARKET_CAP = 'peak_market_cap';
 
@@ -72,51 +55,25 @@ class MemecoinListController extends Controller
         $chain = isset($validated['chain']) ? mb_strtolower($validated['chain']) : null;
         $sort = $validated['sort'] ?? self::SORT_PEAK_MARKET_CAP;
 
-        $ageCutoff = CarbonImmutable::now()->subDays($maxAgeDays);
+        $now = CarbonImmutable::now();
 
-        // Representative crossing = strongest recorded crossing (HISTORICAL_VERIFIED
-        // over CURRENT_OBSERVATION). Used for ?sort=recent_crossing.
-        $representativeCrossedAt = 'coalesce('
-            .'(select qe.crossed_at from qualification_events qe where qe.token_id = tokens.id '
-            ."and qe.type = 'HISTORICAL_VERIFIED' limit 1), "
-            .'(select qe.crossed_at from qualification_events qe where qe.token_id = tokens.id '
-            ."and qe.type = 'CURRENT_OBSERVATION' limit 1))";
-
-        $tokens = Token::query()
-            ->whereNotNull('earliest_pair_created_at')
-            ->where('earliest_pair_created_at', '>=', $ageCutoff)
-            // FLOOR — at least one verified/observed source cleared $5M.
-            ->where(function (Builder $query) use ($peakMin): void {
-                // CURRENT_OBSERVATION — our own DexScreener snapshot saw MC >= $5M.
-                $query->where('observed_peak_market_cap', '>=', $peakMin)
-                    // HISTORICAL_VERIFIED — CoinGecko verified historical MC >= $5M.
-                    // (historical_peak_value only ever holds a verified/observed
-                    // market cap; an FDV estimate lives in a separate column.)
-                    ->orWhere(function (Builder $q) use ($peakMin): void {
-                        $q->where('historical_peak_status', HistoricalPeakEvidence::STATUS_HISTORICAL_VERIFIED)
-                            ->where('historical_peak_value', '>=', $peakMin);
-                    });
-            })
-            // CEILING — the greatest verified/observed peak must be <= $200M.
-            ->whereRaw(
-                'GREATEST(COALESCE(observed_peak_market_cap, 0), COALESCE(historical_peak_value, 0)) <= ?',
-                [$peakMax],
-            )
-            ->when($chain, fn ($query) => $query->where('chain_id', $chain))
-            ->with(['latestSnapshot', 'historicalPeakEvidence', 'qualificationEvents'])
-            ->when(
-                $sort === self::SORT_RECENT_CROSSING,
-                fn ($query) => $query->orderByRaw("({$representativeCrossedAt}) DESC NULLS LAST"),
-                fn ($query) => $query->orderByRaw('GREATEST(COALESCE(observed_peak_market_cap, 0), COALESCE(historical_peak_value, 0)) DESC'),
-            )
-            ->orderBy('id')
-            ->limit($limit)
+        /** @var Collection<int, Token> $qualified */
+        $qualified = Token::query()
+            ->marketCapQualified($now)
+            ->when($chain, fn ($q) => $q->where('chain_id', $chain))
+            ->with(['latestSnapshot', 'historicalPeakEvidence', 'qualificationEvents', 'riskAssessment.signals'])
+            ->limit(500)
             ->get();
 
-        return MemecoinResource::collection($tokens)->additional([
+        // Partition on the shared MAIN LIST / RISK WATCH decision.
+        $mainList = $qualified->filter(fn (Token $token): bool => MainListDecision::for($token, $now)->eligible);
+
+        $sorted = $this->sort($mainList, $sort)->take($limit)->values();
+
+        return MemecoinResource::collection($sorted)->additional([
             'meta' => [
-                'count' => $tokens->count(),
-                'retrieved_at' => CarbonImmutable::now()->toIso8601String(),
+                'count' => $sorted->count(),
+                'retrieved_at' => $now->toIso8601String(),
                 'sort' => $sort,
                 'recent_crossing_hours' => $recentHours,
                 'filters' => [
@@ -126,5 +83,37 @@ class MemecoinListController extends Controller
                 ],
             ],
         ]);
+    }
+
+    /**
+     * @param  Collection<int, Token>  $tokens
+     * @return Collection<int, Token>
+     */
+    private function sort(Collection $tokens, string $sort): Collection
+    {
+        if ($sort === self::SORT_RECENT_CROSSING) {
+            return $tokens->sort(function (Token $a, Token $b): int {
+                $ax = $a->representativeQualificationEvent()?->crossed_at?->getTimestamp();
+                $bx = $b->representativeQualificationEvent()?->crossed_at?->getTimestamp();
+                if ($ax === $bx) {
+                    return $a->id <=> $b->id;
+                }
+                if ($ax === null) {
+                    return 1;
+                }
+                if ($bx === null) {
+                    return -1;
+                }
+
+                return $bx <=> $ax;
+            })->values();
+        }
+
+        return $tokens->sort(function (Token $a, Token $b): int {
+            $ap = max((float) ($a->observed_peak_market_cap ?? 0), (float) ($a->historical_peak_value ?? 0));
+            $bp = max((float) ($b->observed_peak_market_cap ?? 0), (float) ($b->historical_peak_value ?? 0));
+
+            return $ap === $bp ? $a->id <=> $b->id : $bp <=> $ap;
+        })->values();
     }
 }

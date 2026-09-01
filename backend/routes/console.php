@@ -127,6 +127,41 @@ Schedule::command('memecoins:explain-pumps')
     ->description('AI evidence-backed explanation of recent pump events');
 
 /*
+| Memecoin Risk & Safety Screening (Step 24).
+|
+| Deterministic screening (GoPlus primary, GeckoTerminal /info secondary,
+| DexScreener pairs for liquidity structure) over the market-cap-qualified
+| universe. Layers ON TOP of qualification — it never changes qualification,
+| observed_peak_market_cap, pump events or evidence, and never uses AI.
+|
+| Offset AFTER discovery + historical qualification (which run together at the
+| top of the interval) so it screens freshly-persisted tokens, and BEFORE the
+| evidence / AI-explanation offsets:
+|
+|   discovery (+ historical qualification)  (minute 0, 10, 20, …)
+|   pump detection                          (minute 5, 15, 25, …)
+|   risk screening                          (minute 6, 16, 26, …)
+|   evidence collection                     (minute 8, 18, 28, …)
+|
+| A per-token scan cooldown (default 6h) + a per-run token cap keep provider
+| load bounded, so most runs do little work. withoutOverlapping(20) because a
+| screening pass makes several external calls per token. Reuses the existing
+| scheduler container. The read APIs never trigger screening.
+*/
+$riskOffset = max(1, min($interval - 1, $pumpOffset + 1));
+$riskMinutes = [];
+for ($m = $riskOffset; $m < 60; $m += $interval) {
+    $riskMinutes[] = $m;
+}
+$riskCron = implode(',', $riskMinutes).' * * * *';
+
+Schedule::command('memecoins:screen-risk')
+    ->cron($riskCron)
+    ->withoutOverlapping(20)
+    ->sendOutputTo($scheduledCommandOutput)
+    ->description('Deterministic memecoin risk & safety screening (contract / holder / liquidity / pump-dump)');
+
+/*
 | Token Narrative Intelligence (Step 21).
 |
 | "Why was this coin created?" + "Why did it become popular?" — token-level,

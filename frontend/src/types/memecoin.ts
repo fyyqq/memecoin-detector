@@ -3,6 +3,16 @@ import type { QualificationStatus } from './memecoinDetail'
 /** The kind of "$5M crossing" recorded for a token (Step 20). */
 export type CrossingType = 'CURRENT_OBSERVATION' | 'HISTORICAL_VERIFIED'
 
+/**
+ * Step 24 risk level. Never "SAFE" — LOWER / MEDIUM appear on the main list;
+ * HIGH / CRITICAL / UNKNOWN are Risk Watch only. RISK UNKNOWN ("insufficient
+ * security data") is distinct from HIGH.
+ */
+export type RiskLevel = 'LOWER' | 'MEDIUM' | 'HIGH' | 'CRITICAL' | 'UNKNOWN'
+
+/** Tri-state (+ NOT_AVAILABLE) for one risk signal. */
+export type RiskSignalState = 'MEASURED' | 'BAD' | 'UNKNOWN' | 'NOT_AVAILABLE'
+
 /** Sort options for `GET /api/memecoins`. */
 export type MemecoinSort = 'peak_market_cap' | 'recent_crossing'
 
@@ -35,6 +45,16 @@ export interface Memecoin {
   qualification_crossing_type: CrossingType | null
   /** crossed_at within the configured recent window (default 48h). */
   recently_crossed: boolean
+
+  /**
+   * Step 24 — the risk screen this row passed. Every MAIN LIST row is LOWER or
+   * MEDIUM. `risk_summary` is a list of concise pre-written phrases (never the
+   * word "safe").
+   */
+  risk_level: RiskLevel | null
+  risk_score: number | null
+  data_completeness: number | null
+  risk_summary: string[]
 
   /** Days since earliest DEX pool creation (not token deploy time). */
   age_days: number | null
@@ -95,6 +115,48 @@ export interface RecentlyCrossedResponse {
   data: RecentlyCrossedRow[]
   meta: {
     hours: number
+    count: number
+    retrieved_at: string
+    source: string
+    note: string
+  }
+}
+
+// --- Step 24: Risk Watch ----------------------------------------------------
+
+/** One failing risk signal on a Risk Watch row. Explanations are pre-written. */
+export interface RiskWatchFailedSignal {
+  signal: string
+  group: string
+  state: RiskSignalState
+  value: string | null
+  source: string | null
+  severity: 'none' | 'low' | 'medium' | 'high' | 'critical'
+  explanation: string | null
+}
+
+/** One row of `GET /api/memecoins/risk-watch` — qualified by market cap, failed the risk screen. */
+export interface RiskWatchRow {
+  id: number
+  chain_id: string
+  token_address: string
+  name: string | null
+  symbol: string | null
+  current_mc: number | null
+  peak_mc: number | null
+  age_days: number | null
+  risk_level: RiskLevel
+  risk_score: number | null
+  data_completeness: number | null
+  screened_at: string | null
+  /** Concise pre-written reason phrases — only what was actually measured. */
+  reasons: string[]
+  failed_signals: RiskWatchFailedSignal[]
+}
+
+export interface RiskWatchResponse {
+  data: RiskWatchRow[]
+  meta: {
     count: number
     retrieved_at: string
     source: string

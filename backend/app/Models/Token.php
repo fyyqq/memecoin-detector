@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Models;
 
+use Carbon\CarbonImmutable;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
@@ -72,6 +74,36 @@ class Token extends Model
         return $this->hasMany(MarketSnapshot::class);
     }
 
+    /**
+     * The Step 19 market-cap qualification predicate, shared by the read APIs
+     * and the risk screener: age <= max_age_days AND a VERIFIED / OBSERVED peak
+     * in [$5M, $200M]. HISTORICAL_ESTIMATE (FDV basis) and UNKNOWN never
+     * qualify. Risk screening layers ON TOP of this — it never changes it.
+     *
+     * @param  Builder<Token>  $query
+     */
+    public function scopeMarketCapQualified(Builder $query, ?CarbonImmutable $now = null): void
+    {
+        $now ??= CarbonImmutable::now();
+        $maxAgeDays = (int) config('dexscreener.filters.max_age_days');
+        $peakMin = (float) config('dexscreener.filters.observed_peak_market_cap_min_usd');
+        $peakMax = (float) config('dexscreener.filters.observed_peak_market_cap_max_usd');
+
+        $query->whereNotNull('earliest_pair_created_at')
+            ->where('earliest_pair_created_at', '>=', $now->subDays($maxAgeDays))
+            ->where(function (Builder $q) use ($peakMin): void {
+                $q->where('observed_peak_market_cap', '>=', $peakMin)
+                    ->orWhere(function (Builder $q2) use ($peakMin): void {
+                        $q2->where('historical_peak_status', HistoricalPeakEvidence::STATUS_HISTORICAL_VERIFIED)
+                            ->where('historical_peak_value', '>=', $peakMin);
+                    });
+            })
+            ->whereRaw(
+                'GREATEST(COALESCE(observed_peak_market_cap, 0), COALESCE(historical_peak_value, 0)) <= ?',
+                [$peakMax],
+            );
+    }
+
     /** @return HasMany<PumpEvent, $this> */
     public function pumpEvents(): HasMany
     {
@@ -134,5 +166,16 @@ class Token extends Model
     public function narrativeReport(): HasOne
     {
         return $this->hasOne(TokenNarrativeReport::class);
+    }
+
+    /**
+     * The token's current deterministic risk assessment (Step 24) — one row per
+     * token. Written ONLY by `memecoins:screen-risk`; never by a read API.
+     *
+     * @return HasOne<RiskAssessment, $this>
+     */
+    public function riskAssessment(): HasOne
+    {
+        return $this->hasOne(RiskAssessment::class);
     }
 }

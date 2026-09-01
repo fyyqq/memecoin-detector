@@ -2,6 +2,7 @@ import type {
   MemecoinListResponse,
   MemecoinQuery,
   RecentlyCrossedResponse,
+  RiskWatchResponse,
 } from '../types/memecoin'
 
 const API_BASE_URL = (import.meta.env.VITE_API_URL ?? 'http://localhost:8010').replace(/\/$/, '')
@@ -48,6 +49,22 @@ export async function fetchRecentlyCrossed(
   }`
 
   return getJson<RecentlyCrossedResponse>(url, signal)
+}
+
+/**
+ * Fetch the "Risk Watch" feed (Step 24) — market-cap-qualified tokens that fail
+ * the main-list risk screen. Laravel-only, PostgreSQL-only — never a security
+ * provider. This is a risk filter, not a "safe to invest" signal.
+ */
+export async function fetchRiskWatch(
+  chain?: string,
+  signal?: AbortSignal,
+): Promise<RiskWatchResponse> {
+  const params = new URLSearchParams()
+  if (chain) params.set('chain', chain)
+  const url = `${API_BASE_URL}/api/memecoins/risk-watch${params.toString() ? `?${params}` : ''}`
+
+  return getJson<RiskWatchResponse>(url, signal)
 }
 
 async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
