@@ -216,36 +216,53 @@ A memecoin appears **only** when it satisfies ALL of:
    `last_observed_at` (not which feed surfaced it), so this is honestly
    "recently observed by discovery" — never a claim the token is "trending". A
    token that fell off every discovery feed goes stale here.
-5. **risk screen** — `App\Services\Risk\MainListDecision` with `requireMaturity:
-   false`. A **positive hard-failure** (honeypot / cannot-buy / cannot-sell /
-   mintable=true / CRITICAL / HIGH / recorded hard override) rejects on **every**
-   chain. A **RISK UNKNOWN / unscreened / low-completeness** result rejects only
-   on a chain in `config('risk.goplus_chain_map')`; on an uncovered chain (e.g.
-   `robinhood`) that outcome is expected and does not reject by itself
-   (`MEMECOIN_RECENT_CROSSING_ALLOW_UNSUPPORTED_CHAIN_RISK_UNKNOWN`, default
-   true). No change to `MainListDecision` itself or `GET /api/memecoins`.
-6. **holder participation** — when a MEASURED `holder_count` risk signal exists,
+4b. **optional pool-age floor** — `MEMECOIN_RECENT_CROSSING_MIN_AGE_HOURS` (0 =
+   disabled by default). Membership is otherwise purely red-flag-driven.
+5. **unscreenable chain** — a chain absent from `config('risk.goplus_chain_map')`
+   (e.g. `robinhood`) cannot be contract-screened, so it is **excluded**. (The
+   prior `allow_unsupported_chain_risk_unknown` bypass was removed after the
+   2026-09 pippo incident — it let Robinhood pumps through.)
+6. **risk screen** — `App\Services\Risk\MainListDecision` with `requireMaturity:
+   false`. ANY failure (honeypot / cannot-buy / cannot-sell / mintable=true /
+   CRITICAL / HIGH / hard override / RISK UNKNOWN / incomplete) rejects. No
+   change to `MainListDecision` itself or `GET /api/memecoins`.
+7. **holder participation** — when a MEASURED `holder_count` risk signal exists,
    `holder_count / (current_market_cap / 1e6)` ≥
-   `MEMECOIN_RECENT_CROSSING_MIN_HOLDERS_PER_MILLION_MCAP` (**25** — calibrated;
-   reference survivors sit at 552–3,484). A MISSING count rejects only when
-   `MEMECOIN_RECENT_CROSSING_REQUIRE_HOLDER_EVIDENCE` is true (now **false** by
-   default). Never a fabricated count.
-7. **24h volume vs CURRENT market cap** — `volume_h24 / current_market_cap` ≥
+   `MEMECOIN_RECENT_CROSSING_MIN_HOLDERS_PER_MILLION_MCAP` (**25** — calibrated).
+   A MISSING count rejects when `MEMECOIN_RECENT_CROSSING_REQUIRE_HOLDER_EVIDENCE`
+   (default **true**). Never a fabricated count.
+8. **24h volume vs CURRENT market cap** — `volume_h24 / current_market_cap` ≥
    `MEMECOIN_RECENT_CROSSING_MIN_VOLUME_TO_MCAP_RATIO` (**0.01** — calibrated).
-   Rejects e.g. `$50M MC / $7.2K volume` (0.000144). Never FDV, never peak MC;
-   high volume is never a reject; zero / missing volume is a reject.
-8. **liquidity** — `liquidity_usd` ≥ `MEMECOIN_RISK_MIN_LIQUIDITY_USD` (the
-   existing hard floor, $10K) **and** ≥ current MC ×
-   `MEMECOIN_RECENT_CROSSING_MIN_LIQUIDITY_TO_MCAP_RATIO` (**0.005** —
-   calibrated).
+   Rejects e.g. `$50M MC / $7.2K volume` (0.000144). High volume is never a
+   reject; zero / missing volume is a reject.
+9. **liquidity** — `liquidity_usd` ≥ `MEMECOIN_RISK_MIN_LIQUIDITY_USD` ($10K)
+   **and** ≥ current MC × `MEMECOIN_RECENT_CROSSING_MIN_LIQUIDITY_TO_MCAP_RATIO`
+   (**0.005** — calibrated).
+10. **RED FLAG — momentum** — `|price_change_h24|` ≤
+   `MEMECOIN_RECENT_CROSSING_MAX_PRICE_CHANGE_H24_PCT` (**250**). A token still on
+   a vertical (or that just dumped) waits until it settles.
+11. **RED FLAG — post-crossing collapse** — NOT (our observed peak within
+   `MEMECOIN_RECENT_CROSSING_COLLAPSE_LOOKBACK_HOURS` (72) AND current MC < peak ×
+   `MEMECOIN_RECENT_CROSSING_COLLAPSE_FLOOR_RATIO` (0.35)). pippo: $1,299 vs a
+   $12.4M peak ~20 min earlier. A gentle decline weeks after the peak stays
+   `COOLED`.
 
-The three ratio floors (6–8) were calibrated against a 9-token empirical
-reference set — see
-[recently-crossed-calibration.md](recently-crossed-calibration.md).
+The ratio floors (7–9) were calibrated against a 9-token empirical reference
+set; the red-flag gates (5, 10, 11) were added after the 2026-09 pippo incident
+— see [recently-crossed-calibration.md](recently-crossed-calibration.md).
 
-Gates 4–8 live in `App\Services\Historical\RecentlyCrossedQualifier`
-(deterministic, PostgreSQL-only). A token with current MC **below `$5M`** still
-appears (`COOLED`) — it previously crossed. Newest crossing first.
+Same-ticker/name-squatting duplicates (`SameTickerCollapser`) collapse to one
+row per `(chain, symbol, name)` — the record with the sanest
+`liquidity/market_cap` ratio.
+
+Gates live in `App\Services\Historical\RecentlyCrossedQualifier` (deterministic,
+PostgreSQL-only). A token with current MC **below `$5M`** still appears
+(`COOLED`) — it previously crossed. Newest crossing first.
+
+**Stamp revocation** — `memecoins:mark-recently-crossed` nulls
+`recently_crossed_qualified_at` (recording `recently_crossed_revoked_at` /
+`_reason`) when a stamped token whose crossing is still in-window trips a HARD
+red flag (momentum / collapse / unscreenable chain). A SOFT miss keeps the stamp.
 
 ```jsonc
 {

@@ -277,12 +277,12 @@ class PostThirtyDayTest extends TestCase
     }
 
     #[Test]
-    public function a_previously_approved_robinhood_token_continues_into_post_thirty_day(): void
+    public function a_legacy_stamp_still_renders_in_post_thirty_day(): void
     {
-        // The CASHCAT / Juggernaut / Artificial Inu case: a Robinhood survivor
-        // that passed Recently Crossed while young (its chain has no risk
-        // provider, so it was approved via the unsupported-chain data-gap rule)
-        // and is now well past 30 days.
+        // A token stamped BEFORE the pippo-incident revert (when robinhood could
+        // still qualify). The Post-30-Day endpoint is "dumb" — it renders any
+        // live stamp. Going forward such a stamp is either revoked by the marker
+        // (unscreenable chain) or never granted.
         $token = Token::query()->create([
             'chain_id' => 'robinhood',
             'token_address' => 'Addr'.Str::random(24),
@@ -311,6 +311,23 @@ class PostThirtyDayTest extends TestCase
         $this->assertSame(['CASHCAT'], array_map(static fn ($r) => $r['symbol'], $rows));
         $this->assertNull($rows[0]['risk_level']);
         $this->assertSame('pending', $rows[0]['risk_status']);
+    }
+
+    #[Test]
+    public function a_revoked_stamp_removes_the_token_from_post_thirty_day(): void
+    {
+        $token = $this->token(['symbol' => 'REVOKED', 'age_days' => 45]);
+        $this->assertSame(['REVOKED'], $this->symbols());
+
+        // The marker later clears the stamp (a red flag surfaced while its
+        // crossing was still in-window).
+        $token->forceFill([
+            'recently_crossed_qualified_at' => null,
+            'recently_crossed_revoked_at' => $this->now,
+            'recently_crossed_revoked_reason' => 'post_crossing_collapse',
+        ])->save();
+
+        $this->assertSame([], $this->symbols());
     }
 
     // --- chain filter ---------------------------------------------------

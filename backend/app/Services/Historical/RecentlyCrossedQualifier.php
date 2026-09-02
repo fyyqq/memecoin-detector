@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services\Historical;
 
+use App\Models\MarketSnapshot;
 use App\Models\RiskSignal;
 use App\Models\Token;
 use App\Services\Risk\MainListDecision;
@@ -19,35 +20,37 @@ use Carbon\CarbonImmutable;
  *
  * The controller query already enforces: representative crossing inside the
  * 30-day window, age ≤ 30d, and a verified/observed peak in `[$5M, $1B)`. This
- * class adds the market-QUALITY gates, evaluated in order:
+ * class adds the market-QUALITY + RED-FLAG gates, evaluated in order:
  *
  *   1. discovery freshness — the discovery pipeline OBSERVED the token within
- *      `recent_crossing.discovery_freshness_hours`. We persist only
- *      `last_observed_at`, not which feed surfaced it, so this is honestly
- *      "recently observed by discovery" — never a claim the token is "trending".
- *   2. risk screen — reuses {@see MainListDecision} WITHOUT the main-list ≥ 72h
- *      maturity gate. A POSITIVE hard-failure (honeypot / cannot-buy /
- *      cannot-sell / mintable / CRITICAL / HIGH / recorded hard override)
- *      rejects on every chain. A RISK-UNKNOWN / unscreened / low-completeness
- *      result rejects only on a chain our security provider
- *      (`risk.goplus_chain_map`) covers; on an unsupported chain (e.g.
- *      `robinhood`) that outcome is expected and does not reject by itself
- *      (`recent_crossing.allow_unsupported_chain_risk_unknown`).
- *   3. holder participation — when a MEASURED `holder_count` risk signal
- *      exists, holders per $1M of CURRENT market cap must be ≥
- *      `min_holders_per_million_mcap` (calibrated to 25 — reference survivors
- *      sit at 552–3,484). A MISSING count rejects only when
- *      `require_holder_evidence` is true (default false — unsupported chains
- *      cannot produce one). Never a fabricated count.
- *   4. 24h volume vs CURRENT market cap — `volume_h24 / current_market_cap` ≥
- *      `min_volume_to_mcap_ratio` (calibrated to 0.01 — reference survivors
- *      0.035–0.75). Never FDV, never peak MC. High volume is never a reject.
- *   5. liquidity — `liquidity_usd` ≥ `risk.liquidity.min_total_usd` (the
- *      existing hard floor) AND ≥ current MC × `min_liquidity_to_mcap_ratio`
- *      (calibrated to 0.005 — reference survivors 0.016–0.32).
+ *      `recent_crossing.discovery_freshness_hours`. Honestly "recently observed
+ *      by discovery", never a claim the token is "trending".
+ *   1b. optional pool-age floor — `recent_crossing.min_age_hours` (0 = off).
+ *   2. unscreenable chain — a chain absent from `config('risk.goplus_chain_map')`
+ *      cannot be contract-screened (no honeypot / mint / blacklist check), so it
+ *      is not listed. HARD red flag.
+ *   3. risk screen — reuses {@see MainListDecision} WITHOUT the ≥ 72h maturity
+ *      gate. Any failure (honeypot / cannot-buy / cannot-sell / mintable /
+ *      CRITICAL / HIGH / hard override / RISK UNKNOWN / incomplete) rejects.
+ *      SOFT for a covered chain (the stamp survives — Post-30-Day shows current
+ *      risk alongside).
+ *   4. holder participation — when a MEASURED `holder_count` risk signal exists,
+ *      holders per $1M of CURRENT market cap ≥ `min_holders_per_million_mcap`
+ *      (25). A MISSING count rejects when `require_holder_evidence` (true).
+ *   5. 24h volume vs CURRENT market cap ≥ `min_volume_to_mcap_ratio` (0.01).
+ *   6. liquidity ≥ `risk.liquidity.min_total_usd` AND ≥ current MC ×
+ *      `min_liquidity_to_mcap_ratio` (0.005).
+ *   7. RED FLAG — momentum: |`price_change_h24`| ≤ `max_price_change_h24_pct`
+ *      (250). A token still on a vertical (or that just dumped) is not listed
+ *      until it settles. HARD red flag.
+ *   8. RED FLAG — post-crossing collapse: NOT (our observed peak within
+ *      `collapse_lookback_hours` AND current MC < peak × `collapse_floor_ratio`).
+ *      pippo: $1,299 vs a $12.4M peak ~20 min earlier. A gentle decline weeks
+ *      after the peak is still `COOLED`. HARD red flag.
  *
- * The ratio floors were calibrated against a 9-token empirical reference set —
- * see docs/recently-crossed-calibration.md.
+ * The ratio floors (4–6) were calibrated against a 9-token empirical reference
+ * set; the red-flag gates (2, 7, 8) were added after the 2026-09 "pippo"
+ * incident — see docs/recently-crossed-calibration.md.
  *
  * This never changes qualification, `observed_peak_market_cap`, pump events,
  * evidence, or the risk assessment — it only decides list membership.
@@ -56,7 +59,7 @@ class RecentlyCrossedQualifier
 {
     public function evaluate(Token $token, CarbonImmutable $now): RecentlyCrossedDecision
     {
-        $snapshot = $token->relationLoaded('latestSnapshot') ? $token->latestSnapshot : $token->latestSnapshot()->first();
+        $snapshot = $this->latestSnapshot($token);
         $currentMc = $snapshot?->market_cap;
 
         // 1. discovery freshness -------------------------------------------------
@@ -66,9 +69,26 @@ class RecentlyCrossedQualifier
             return RecentlyCrossedDecision::reject(RecentlyCrossedDecision::REASON_DISCOVERY_STALE);
         }
 
-        // 2. risk screen (no maturity gate) ------------------------------------
-        $decision = MainListDecision::for($token, $now, requireMaturity: false);
-        if (! $decision->eligible && ! $this->riskFailureIsOnlyAnUnsupportedChainDataGap($token, $decision)) {
+        // 1b. optional hard pool-age floor (0 = disabled) ----------------------
+        $minAgeHours = (int) config('dexscreener.recent_crossing.min_age_hours', 0);
+        if ($minAgeHours > 0
+            && ($token->earliest_pair_created_at === null
+                || $token->earliest_pair_created_at->greaterThan($now->subHours($minAgeHours)))) {
+            return RecentlyCrossedDecision::reject(RecentlyCrossedDecision::REASON_TOO_YOUNG);
+        }
+
+        // 2. unscreenable chain (HARD) ----------------------------------------
+        // No security-provider coverage => we cannot rule out a honeypot / mint
+        // / blacklist, so we do not list it.
+        if ($this->chainIsUnscreenable($token)) {
+            return RecentlyCrossedDecision::reject(
+                RecentlyCrossedDecision::REASON_RISK_SCREEN_FAILED,
+                hardRedFlag: true,
+            );
+        }
+
+        // 3. risk screen (no maturity gate) ---------------------------------
+        if (! MainListDecision::for($token, $now, requireMaturity: false)->eligible) {
             return RecentlyCrossedDecision::reject(RecentlyCrossedDecision::REASON_RISK_SCREEN_FAILED);
         }
 
@@ -79,13 +99,13 @@ class RecentlyCrossedQualifier
             return RecentlyCrossedDecision::reject(RecentlyCrossedDecision::REASON_VOLUME_TOO_THIN);
         }
 
-        // 3. holder participation ---------------------------------------------
+        // 4. holder participation -------------------------------------------
         $holderResult = $this->holderGate($token, (float) $currentMc);
         if ($holderResult !== null) {
             return RecentlyCrossedDecision::reject($holderResult);
         }
 
-        // 4. 24h volume vs CURRENT market cap --------------------------------
+        // 5. 24h volume vs CURRENT market cap ------------------------------
         $volume = $snapshot?->volume_h24;
         if ($volume === null) {
             return RecentlyCrossedDecision::reject(RecentlyCrossedDecision::REASON_VOLUME_MISSING);
@@ -95,7 +115,7 @@ class RecentlyCrossedQualifier
             return RecentlyCrossedDecision::reject(RecentlyCrossedDecision::REASON_VOLUME_TOO_THIN);
         }
 
-        // 5. liquidity -------------------------------------------------------
+        // 6. liquidity ---------------------------------------------------
         $liquidity = $snapshot?->liquidity_usd;
         if ($liquidity === null) {
             return RecentlyCrossedDecision::reject(RecentlyCrossedDecision::REASON_LIQUIDITY_MISSING);
@@ -106,32 +126,107 @@ class RecentlyCrossedQualifier
             return RecentlyCrossedDecision::reject(RecentlyCrossedDecision::REASON_LIQUIDITY_TOO_THIN);
         }
 
+        // 7. RED FLAG — momentum still vertical (HARD) --------------------
+        if ($this->momentumAnomaly($snapshot)) {
+            return RecentlyCrossedDecision::reject(
+                RecentlyCrossedDecision::REASON_MOMENTUM_ANOMALY,
+                hardRedFlag: true,
+            );
+        }
+
+        // 8. RED FLAG — spiked-then-collapsed (HARD) ---------------------
+        if ($this->postCrossingCollapse($token, (float) $currentMc, $now)) {
+            return RecentlyCrossedDecision::reject(
+                RecentlyCrossedDecision::REASON_POST_CROSSING_COLLAPSE,
+                hardRedFlag: true,
+            );
+        }
+
         return RecentlyCrossedDecision::pass();
     }
 
     /**
-     * True when the risk screen only failed because the token's chain has no
-     * security-provider coverage (RISK UNKNOWN / not screened / incomplete /
-     * insufficient data) AND there is no POSITIVE hard-failure signal. On a
-     * covered chain (`risk.goplus_chain_map`) every risk failure still rejects.
+     * A pure HARD-red-flag check, independent of the soft gates. Used ONLY by
+     * {@see RecentlyCrossedApprovalMarker}'s revocation pass to decide whether
+     * an existing "previously approved" stamp should be cleared. Returns the
+     * reason code, or null when the token trips no hard red flag.
      */
-    private function riskFailureIsOnlyAnUnsupportedChainDataGap(Token $token, MainListDecision $decision): bool
+    public function redFlag(Token $token, CarbonImmutable $now): ?string
     {
-        if (! (bool) config('dexscreener.recent_crossing.allow_unsupported_chain_risk_unknown', true)) {
+        if ($this->chainIsUnscreenable($token)) {
+            return RecentlyCrossedDecision::REASON_RISK_SCREEN_FAILED;
+        }
+
+        $snapshot = $this->latestSnapshot($token);
+
+        if ($this->momentumAnomaly($snapshot)) {
+            return RecentlyCrossedDecision::REASON_MOMENTUM_ANOMALY;
+        }
+
+        if ($snapshot?->market_cap !== null
+            && $this->postCrossingCollapse($token, (float) $snapshot->market_cap, $now)) {
+            return RecentlyCrossedDecision::REASON_POST_CROSSING_COLLAPSE;
+        }
+
+        return null;
+    }
+
+    private function latestSnapshot(Token $token): ?MarketSnapshot
+    {
+        return $token->relationLoaded('latestSnapshot')
+            ? $token->latestSnapshot
+            : $token->latestSnapshot()->first();
+    }
+
+    /**
+     * True when the token's chain has no security-provider coverage
+     * (`config('risk.goplus_chain_map')` is the authoritative covered-chains
+     * list — e.g. `robinhood` is absent).
+     */
+    private function chainIsUnscreenable(Token $token): bool
+    {
+        $covered = array_map('strval', array_keys((array) config('risk.goplus_chain_map', [])));
+
+        return ! in_array((string) $token->chain_id, $covered, true);
+    }
+
+    /**
+     * RED FLAG — the token is still on a vertical (up or crashing). A `null`
+     * 24h change is a data gap, not a red flag.
+     */
+    private function momentumAnomaly(?MarketSnapshot $snapshot): bool
+    {
+        $change = $snapshot?->price_change_h24;
+        if ($change === null) {
             return false;
         }
 
-        $dataGapReasons = ['not_screened', 'risk_unknown', 'screening_incomplete', 'insufficient_security_data'];
+        $max = (float) config('dexscreener.recent_crossing.max_price_change_h24_pct', 250.0);
 
-        // Any non-data-gap reason (risk_high / risk_critical / hard_filter:* /
-        // too_young) means a real failure — never bypass.
-        if ($decision->reasons === [] || array_diff($decision->reasons, $dataGapReasons) !== []) {
+        return abs((float) $change) > $max;
+    }
+
+    /**
+     * RED FLAG — our OWN observed peak was reached very recently AND the current
+     * market cap has since collapsed to a small fraction of it. A decline that
+     * started long after the peak is a trend, not a rug, and stays `COOLED`.
+     */
+    private function postCrossingCollapse(Token $token, float $currentMc, CarbonImmutable $now): bool
+    {
+        $peak = $token->observed_peak_market_cap;
+        $peakAt = $token->observed_peak_market_cap_at;
+        if ($peak === null || $peak <= 0.0 || $peakAt === null) {
             return false;
         }
 
-        $coveredChains = array_map('strval', array_keys((array) config('risk.goplus_chain_map', [])));
+        $lookbackHours = (int) config('dexscreener.recent_crossing.collapse_lookback_hours', 72);
+        if ($peakAt->lessThan($now->subHours($lookbackHours))) {
+            return false;
+        }
 
-        return ! in_array((string) $token->chain_id, $coveredChains, true);
+        $floorRatio = (float) config('dexscreener.recent_crossing.collapse_floor_ratio', 0.35);
+
+        return $currentMc < (float) $peak * $floorRatio;
     }
 
     /**

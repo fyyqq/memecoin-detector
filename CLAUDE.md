@@ -401,7 +401,7 @@ rest are documented for naming consistency only — do **not** create them yet.
 
 | Concept          | Meaning | Status |
 | ---------------- | ------- | ------ |
-| `Token`          | A memecoin (chain + address identity). Unique on `(chain_id, token_address)`. Carries `observed_peak_market_cap` (+`_at`) = OUR OWN snapshot peak; SEPARATE `historical_peak_value` (+`_at`) = a VERIFIED/OBSERVED market cap that qualifies the main list; SEPARATE `historical_estimate_fdv_usd` (+`_at`) = a GeckoTerminal FDV-basis estimate (informational, never qualifies); `historical_peak_status` = the raw label. `first/last_observed_at`, `earliest_pair_created_at`. `recently_crossed_qualified_at` = when the token FIRST passed the whole "Recently Crossed $5M" predicate — the persisted "previously approved" marker for the **Post-30-Day** list; written ONCE by `memecoins:mark-recently-crossed`, never cleared or rewritten. | **implemented (minimal)** |
+| `Token`          | A memecoin (chain + address identity). Unique on `(chain_id, token_address)`. Carries `observed_peak_market_cap` (+`_at`) = OUR OWN snapshot peak; SEPARATE `historical_peak_value` (+`_at`) = a VERIFIED/OBSERVED market cap that qualifies the main list; SEPARATE `historical_estimate_fdv_usd` (+`_at`) = a GeckoTerminal FDV-basis estimate (informational, never qualifies); `historical_peak_status` = the raw label. `first/last_observed_at`, `earliest_pair_created_at`. `recently_crossed_qualified_at` = when the token FIRST passed the whole "Recently Crossed $5M" predicate — the persisted "previously approved" marker for the **Post-30-Day** list; written by `memecoins:mark-recently-crossed`, and CLEARED by its revocation pass (`recently_crossed_revoked_at` / `_reason`) if the token later trips a HARD red flag (momentum / collapse / unscreenable chain) while its crossing is still in-window; a SOFT miss keeps it. | **implemented (minimal)** |
 | `MarketSnapshot` | One market observation for a token at `observed_at` (price, market cap, fdv, liquidity, volume, txns, primary pair). Many rows per token. No raw payloads. | **implemented (minimal)** |
 | `IngestionRun`   | One execution of the discovery pipeline — `trigger` (`manual`/`scheduled`), `status` (`running`/`completed`/`failed`), `started/completed_at`, funnel counts, `error_message`, plus Step 19 trending-meta coverage (`trending_meta_count`, `trending_meta_pairs_seen`, `trending_meta_unique_candidates`, `pre_filtered_candidates`, `discovery_source_counts` json, `trending_meta_slugs_used` json). Observability only. | **implemented (minimal)** |
 | `HistoricalPeakEvidence` | One row per token (upserted, re-evaluable): `status` (`CURRENT_OBSERVATION`/`HISTORICAL_VERIFIED`/`HISTORICAL_ESTIMATE`/`UNKNOWN`), `peak_value_usd`, `evidence_source` (dexscreener/coingecko/geckoterminal), `evidence_basis` (market_cap/fdv_total_supply/current_market_cap), `source_reference`, `confidence`, `checked_at`. No provider JSON. **Only `CURRENT_OBSERVATION` / `HISTORICAL_VERIFIED` with `peak_value_usd` in `[$5M, $1B)` qualify the main list** (`qualifies($min, $max)`; `peakAboveCeiling($min, $max)` flags a peak that cleared the floor but exceeds the ceiling); `HISTORICAL_ESTIMATE` is `isInformationalEstimate()` only. | **implemented** |
@@ -481,8 +481,11 @@ In scope:
    (`GET /api/memecoins/post-30-day`) — the SAME `earliest_pair_created_at` age
    rule (> 30d), historical approval preserved even after a dump / stale
    discovery / a HIGH-risk rescreen, current metrics + current risk still shown.
-   No re-discovery, no new qualification system, no new table. Recently Crossed
-   (age ≤ 30d) and Post-30-Day (age > 30d) never overlap.
+   No re-discovery, no new qualification system. Recently Crossed (age ≤ 30d) and
+   Post-30-Day (age > 30d) never overlap. **The stamp is cleared** if the token
+   trips a HARD red flag (momentum / post-crossing collapse / unscreenable chain)
+   while its crossing is still in-window — a red-flagged pump never reaches
+   Post-30-Day (2026-09 pippo incident).
 9. *(removed — monthly-removal pass)* **"🏆 Monthly Top Memecoins"** homepage
    section + the detail-page "Monthly Top Performer" block,
    `GET /api/memecoins/monthly-champions`, the whole `App\Services\Ranking\*` +
@@ -655,27 +658,31 @@ Explicitly **excluded** from Sprint 1:
   (`last_observed_at` within `MEMECOIN_RECENT_CROSSING_DISCOVERY_FRESHNESS_HOURS`
   48h — the only persisted token-level "recently observed by discovery" signal;
   NEVER phrased as "trending"; we don't store which feed surfaced a token) ·
-  **risk screen** (`MainListDecision` with `requireMaturity: false` — a positive
-  hard-failure signal (honeypot / cannot-buy / cannot-sell / mintable / CRITICAL
-  / HIGH / recorded hard override) rejects on **every** chain; a RISK UNKNOWN /
-  unscreened / low-completeness result rejects **only** on a chain in
-  `config('risk.goplus_chain_map')` — on an uncovered chain (e.g. `robinhood`)
-  that is expected and does not reject by itself,
-  `MEMECOIN_RECENT_CROSSING_ALLOW_UNSUPPORTED_CHAIN_RISK_UNKNOWN`=true) · **holder
-  participation** (when a MEASURED `holder_count` signal exists,
+  **unscreenable chain** (a chain absent from `config('risk.goplus_chain_map')` —
+  e.g. `robinhood` — is **excluded**: no honeypot / mint / blacklist check
+  possible. The prior `allow_unsupported_chain_risk_unknown` bypass was removed
+  after the 2026-09 pippo incident) · **risk screen** (`MainListDecision`,
+  `requireMaturity: false` — ANY failure rejects: honeypot / cannot-buy /
+  cannot-sell / mintable / CRITICAL / HIGH / hard override / RISK UNKNOWN /
+  incomplete) · **holder participation** (MEASURED `holder_count` →
   `holders / (currentMc/1e6)` ≥ `MEMECOIN_RECENT_CROSSING_MIN_HOLDERS_PER_MILLION_MCAP`
-  **25** — calibrated; a MISSING count rejects only when
-  `MEMECOIN_RECENT_CROSSING_REQUIRE_HOLDER_EVIDENCE`=true, now **false** by
-  default) · **24h volume vs CURRENT MC** (`volume_h24 / current_market_cap` ≥
-  `MEMECOIN_RECENT_CROSSING_MIN_VOLUME_TO_MCAP_RATIO` **0.01** — calibrated;
-  rejects `$50M MC / $7.2K vol` = 0.000144; zero/missing vol rejected; high vol
-  never rejected) · **liquidity** (≥ `MEMECOIN_RISK_MIN_LIQUIDITY_USD` $10K AND ≥
-  currentMc × `MEMECOIN_RECENT_CROSSING_MIN_LIQUIDITY_TO_MCAP_RATIO` **0.005** —
-  calibrated). Gates 4–8 live in `App\Services\Historical\RecentlyCrossedQualifier`
-  (deterministic). The three ratio floors were **calibrated against a 9-token
-  empirical reference set** — see
-  [docs/recently-crossed-calibration.md](docs/recently-crossed-calibration.md);
-  the old 0.001 / 0.001 / 5 values were ~10–100× weaker than any real survivor.
+  **25**; a MISSING count rejects when `..._REQUIRE_HOLDER_EVIDENCE`=**true**,
+  reverted default) · **24h volume vs CURRENT MC** (≥
+  `MEMECOIN_RECENT_CROSSING_MIN_VOLUME_TO_MCAP_RATIO` **0.01**; rejects `$50M MC /
+  $7.2K vol`; zero/missing vol rejected; high vol never rejected) · **liquidity**
+  (≥ `MEMECOIN_RISK_MIN_LIQUIDITY_USD` $10K AND ≥ currentMc ×
+  `MEMECOIN_RECENT_CROSSING_MIN_LIQUIDITY_TO_MCAP_RATIO` **0.005**) · **RED FLAG —
+  momentum** (`|price_change_h24|` ≤ `..._MAX_PRICE_CHANGE_H24_PCT` **250** — a
+  coin still on a vertical waits until it settles) · **RED FLAG — post-crossing
+  collapse** (NOT: our observed peak within `..._COLLAPSE_LOOKBACK_HOURS` **72**
+  AND currentMc < peak × `..._COLLAPSE_FLOOR_RATIO` **0.35** — pippo $1,299 vs a
+  $12.4M peak minutes earlier; a gentle decline weeks later stays `COOLED`) ·
+  **optional** `..._MIN_AGE_HOURS` (**0** = off). Same-ticker/name squatters
+  collapse to one row (`SameTickerCollapser` — sanest `liquidity/MC` ratio).
+  Gates live in `App\Services\Historical\RecentlyCrossedQualifier` (deterministic).
+  The ratio floors were **calibrated against a 9-token reference set** and the
+  red-flag gates added after the pippo incident — see
+  [docs/recently-crossed-calibration.md](docs/recently-crossed-calibration.md).
   **A token with current MC below $5M still appears** (`COOLED`) — the floor is a
   peak rule. Rows carry `status` `ACTIVE`/`COOLED` — never alarmist, never says
   "safe". `config('dexscreener.recent_crossing.*')`.
@@ -922,18 +929,22 @@ Explicitly **excluded** from Sprint 1:
   RISK · CRITICAL — AVOID · RISK UNKNOWN · DISQUALIFIED. `config/risk.php`.
   Docs: [docs/risk-screening.md](docs/risk-screening.md) +
   [docs/memecoin-risk-reconnaissance.md](docs/memecoin-risk-reconnaissance.md).
-- **Post-30-Day Memecoin Tracking** — `php artisan memecoins:mark-recently-crossed`,
-  scheduled `7,17,27,37,47,57 * * * *` (the discovery cadence, offset AFTER
-  `screen-risk` so the risk gate sees fresh data, BEFORE the evidence offset;
-  `withoutOverlapping`; reuses the `scheduler` container). PostgreSQL-only — no
-  external calls, no discovery. `RecentlyCrossedApprovalMarker` reuses exactly
-  the Recently Crossed predicate (`Token::scopeRecentlyCrossedListingCandidate` —
-  extracted + also consumed by `RecentlyCrossedController`, behaviour unchanged —
-  + representative-crossing-in-window + `RecentlyCrossedQualifier`) and stamps
-  `tokens.recently_crossed_qualified_at` ONCE for each passing token
-  (`whereNull` guard → idempotent, never cleared, never rewritten). That marker
-  feeds `GET /api/memecoins/post-30-day` (age > 30d). Never changes Recently
-  Crossed, qualification, `observed_peak_market_cap`, pumps, evidence or risk.
+- **Post-30-Day Memecoin Tracking** — `php artisan memecoins:mark-recently-crossed`
+  `[--dry-run]`, scheduled `7,17,27,37,47,57 * * * *` (the discovery cadence,
+  offset AFTER `screen-risk`, BEFORE the evidence offset; `withoutOverlapping`;
+  reuses the `scheduler` container). PostgreSQL-only — no external calls, no
+  discovery. `RecentlyCrossedApprovalMarker` reuses the Recently Crossed
+  predicate (`Token::scopeRecentlyCrossedListingCandidate` — extracted + also
+  consumed by `RecentlyCrossedController` — + representative-crossing-in-window +
+  `RecentlyCrossedQualifier`). Two passes: **STAMP** — `recently_crossed_qualified_at`
+  for each newly-passing token (one per same-ticker group via `SameTickerCollapser`);
+  **REVOKE** — a stamped token whose crossing is still in-window that now trips a
+  HARD red flag (`RecentlyCrossedQualifier::redFlag()` — momentum / post-crossing
+  collapse / unscreenable chain) has its stamp nulled, `recently_crossed_revoked_at`
+  / `_reason` recorded, and is never re-stamped; a SOFT miss keeps the stamp.
+  That marker feeds `GET /api/memecoins/post-30-day` (age > 30d). Never changes
+  Recently Crossed logic itself, qualification, `observed_peak_market_cap`,
+  pumps, evidence or risk.
 - **Dashboard** — homepage: **Header (real-chain filter + Refresh) → 🔥 Recently
   Crossed $5M → 📈 Post-30-Day Memecoins → footer**. Removed over successive
   passes: **"🟢 Main Memecoin List"**, **"📊 Chain Market Activity"**,

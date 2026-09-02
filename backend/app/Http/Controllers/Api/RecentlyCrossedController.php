@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\QualificationEvent;
 use App\Models\Token;
 use App\Services\Historical\RecentlyCrossedQualifier;
+use App\Services\Historical\SameTickerCollapser;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -59,27 +61,31 @@ class RecentlyCrossedController extends Controller
         $tokens = Token::query()
             ->recentlyCrossedListingCandidate($now)
             ->when($chain, fn ($query) => $query->where('chain_id', $chain))
+            ->withCount('marketSnapshots')
             ->with(['latestSnapshot', 'historicalPeakEvidence', 'qualificationEvents', 'riskAssessment.signals'])
             ->get();
 
-        $rows = $tokens
-            ->map(function (Token $token) use ($now, $windowStart): ?array {
+        // Every token that clears the window check + all deterministic gates.
+        $qualified = $tokens->filter(function (Token $token) use ($now, $windowStart): bool {
+            $event = $token->representativeQualificationEvent();
+            if ($event === null || $event->crossed_at === null) {
+                return false;
+            }
+
+            // The REPRESENTATIVE crossing must itself be inside the window.
+            if ($event->crossed_at->getTimestamp() < $windowStart->getTimestamp()) {
+                return false;
+            }
+
+            // Deterministic quality + red-flag gates. PostgreSQL-only.
+            return $this->qualifier->evaluate($token, $now)->qualifies;
+        });
+
+        // Collapse ticker/name-squatting duplicates to one row per coin identity.
+        $rows = SameTickerCollapser::winners($qualified)
+            ->map(function (Token $token) use ($now): array {
+                /** @var QualificationEvent $event */
                 $event = $token->representativeQualificationEvent();
-                if ($event === null || $event->crossed_at === null) {
-                    return null;
-                }
-
-                // The REPRESENTATIVE crossing must itself be inside the window.
-                if ($event->crossed_at->getTimestamp() < $windowStart->getTimestamp()) {
-                    return null;
-                }
-
-                // Deterministic quality gates (risk / holders / volume / liquidity /
-                // discovery freshness). PostgreSQL-only.
-                if (! $this->qualifier->evaluate($token, $now)->qualifies) {
-                    return null;
-                }
-
                 $snapshot = $token->latestSnapshot;
                 $qualificationPeak = $this->qualificationPeak($token);
 
@@ -101,7 +107,6 @@ class RecentlyCrossedController extends Controller
                     '_crossed_at_ts' => $event->crossed_at->getTimestamp(),
                 ];
             })
-            ->filter()
             ->sortByDesc('_crossed_at_ts')
             ->map(function (array $row): array {
                 unset($row['_crossed_at_ts']);

@@ -50,16 +50,20 @@ class RecentlyCrossedTest extends TestCase
         config()->set('dexscreener.recent_crossing.discovery_freshness_hours', 48);
         // Calibrated thresholds (see docs/recently-crossed-calibration.md).
         config()->set('dexscreener.recent_crossing.min_holders_per_million_mcap', 25.0);
-        config()->set('dexscreener.recent_crossing.require_holder_evidence', false);
+        config()->set('dexscreener.recent_crossing.require_holder_evidence', true);
         config()->set('dexscreener.recent_crossing.min_volume_to_mcap_ratio', 0.01);
         config()->set('dexscreener.recent_crossing.min_liquidity_to_mcap_ratio', 0.005);
-        config()->set('dexscreener.recent_crossing.allow_unsupported_chain_risk_unknown', true);
+        // Red-flag gates (2026-09 pippo incident).
+        config()->set('dexscreener.recent_crossing.max_price_change_h24_pct', 250.0);
+        config()->set('dexscreener.recent_crossing.collapse_lookback_hours', 72);
+        config()->set('dexscreener.recent_crossing.collapse_floor_ratio', 0.35);
+        config()->set('dexscreener.recent_crossing.min_age_hours', 0);
 
         config()->set('risk.liquidity.min_total_usd', 10_000.0);
         config()->set('risk.main_list.require_screening', true);
         config()->set('risk.min_data_completeness', 0.5);
         // Chains our security provider covers — anything else (e.g. robinhood) is
-        // an "unsupported chain" for the RISK-UNKNOWN bypass.
+        // an unscreenable chain and is excluded from Recently Crossed.
         config()->set('risk.goplus_chain_map', [
             'ethereum' => '1', 'bsc' => '56', 'base' => '8453', 'solana' => 'solana',
         ]);
@@ -93,7 +97,10 @@ class RecentlyCrossedTest extends TestCase
             'first_observed_at' => $this->now->subDays(5),
             'last_observed_at' => $this->now,
             'observed_peak_market_cap' => 25_000_000.0,
-            'observed_peak_market_cap_at' => $this->now->subDays(1),
+            // Default the observed peak WELL outside the collapse-lookback window
+            // so the post-crossing-collapse red flag only fires where a test
+            // deliberately sets a recent `observed_peak_market_cap_at`.
+            'observed_peak_market_cap_at' => $this->now->subDays(10),
         ], $attrs));
 
         $token->marketSnapshots()->create(array_replace([
@@ -372,19 +379,18 @@ class RecentlyCrossedTest extends TestCase
     }
 
     #[Test]
-    public function missing_holder_evidence_no_longer_rejects_by_default(): void
+    public function missing_holder_evidence_is_rejected_by_default(): void
     {
-        // Calibrated default: `require_holder_evidence` is false — an UNKNOWN
-        // holder signal (or none at all) does not reject; the ratio floor only
-        // applies when a MEASURED count exists.
+        // Default (reverted after the pippo incident): `require_holder_evidence`
+        // is true — a covered chain always has a holder count.
         $token = $this->token(['symbol' => 'NOHOLD'], [], ['holders' => null]); // UNKNOWN holder_count signal
         $this->crossing($token, QualificationEvent::TYPE_CURRENT_OBSERVATION, $this->now->subHours(6));
 
-        $this->assertSame(['NOHOLD'], $this->symbols());
-
-        // ...but rejected when an operator opts back into requiring evidence.
-        config()->set('dexscreener.recent_crossing.require_holder_evidence', true);
         $this->assertSame([], $this->symbols());
+
+        // ...but allowed when an operator relaxes the policy.
+        config()->set('dexscreener.recent_crossing.require_holder_evidence', false);
+        $this->assertSame(['NOHOLD'], $this->symbols());
     }
 
     #[Test]
@@ -404,64 +410,37 @@ class RecentlyCrossedTest extends TestCase
         $this->assertContains('OKHOLD', $this->symbols());
     }
 
-    // --- unsupported-chain risk data gap ------------------------------
+    // --- unscreenable chain (reverted after the pippo incident) -------
 
     #[Test]
-    public function a_token_on_an_unscreenable_chain_is_not_rejected_for_risk_unknown_alone(): void
+    public function a_token_on_an_unscreenable_chain_is_excluded(): void
     {
-        // robinhood is absent from risk.goplus_chain_map -> RISK UNKNOWN is
-        // expected, not a red flag. No hard-failure signal, market quality OK.
+        // robinhood is absent from risk.goplus_chain_map — we cannot rule out a
+        // honeypot / mint / blacklist, so it is not listed regardless of how
+        // clean everything else looks.
         $token = $this->token(
             ['symbol' => 'RHOOD', 'chain_id' => 'robinhood'],
             ['market_cap' => 20_000_000.0, 'volume_h24' => 900_000.0, 'liquidity_usd' => 400_000.0],
             ['skipRisk' => true, 'skipHolders' => true],
         );
-        $this->failRisk($token, RiskAssessment::LEVEL_UNKNOWN);
         $this->crossing($token, QualificationEvent::TYPE_CURRENT_OBSERVATION, $this->now->subHours(6));
 
-        $this->assertSame(['RHOOD'], $this->symbols('?chain=robinhood'));
-    }
+        $this->assertSame([], $this->symbols('?chain=robinhood'));
 
-    #[Test]
-    public function an_unscreened_token_on_an_unscreenable_chain_is_not_rejected(): void
-    {
-        $token = $this->token(
-            ['symbol' => 'RHNEW', 'chain_id' => 'robinhood'],
-            ['market_cap' => 20_000_000.0, 'volume_h24' => 900_000.0, 'liquidity_usd' => 400_000.0],
-            ['skipRisk' => true, 'skipHolders' => true],
-        );
-        $this->crossing($token, QualificationEvent::TYPE_CURRENT_OBSERVATION, $this->now->subHours(6));
-
-        $this->assertSame(['RHNEW'], $this->symbols('?chain=robinhood'));
-    }
-
-    #[Test]
-    public function an_unscreenable_chain_token_with_a_hard_failure_signal_is_still_rejected(): void
-    {
-        $token = $this->token(['symbol' => 'RHTRAP', 'chain_id' => 'robinhood'], [], ['skipRisk' => true, 'skipHolders' => true]);
-        $this->failRisk($token, RiskAssessment::LEVEL_CRITICAL); // honeypot hard override
-        $this->crossing($token, QualificationEvent::TYPE_CURRENT_OBSERVATION, $this->now->subHours(6));
-
+        // Even a (defensively) clean risk assessment does not help.
+        $this->passRisk($token, RiskAssessment::LEVEL_LOWER);
+        $this->setHolders($token, 8_000);
         $this->assertSame([], $this->symbols('?chain=robinhood'));
     }
 
     #[Test]
-    public function the_unsupported_chain_bypass_does_not_apply_to_a_covered_chain(): void
+    public function a_covered_chain_risk_unknown_token_is_still_rejected(): void
     {
-        // solana IS covered -> RISK UNKNOWN still rejects (unchanged behaviour).
         $token = $this->token(['symbol' => 'SOLDARK', 'chain_id' => 'solana'], [], ['skipRisk' => true, 'skipHolders' => true]);
         $this->failRisk($token, RiskAssessment::LEVEL_UNKNOWN);
         $this->crossing($token, QualificationEvent::TYPE_CURRENT_OBSERVATION, $this->now->subHours(6));
 
         $this->assertSame([], $this->symbols());
-
-        // ...and the bypass can be turned off entirely.
-        config()->set('dexscreener.recent_crossing.allow_unsupported_chain_risk_unknown', false);
-        $rh = $this->token(['symbol' => 'RHOFF', 'chain_id' => 'robinhood'], [], ['skipRisk' => true, 'skipHolders' => true]);
-        $this->failRisk($rh, RiskAssessment::LEVEL_UNKNOWN);
-        $this->crossing($rh, QualificationEvent::TYPE_CURRENT_OBSERVATION, $this->now->subHours(6));
-
-        $this->assertSame([], $this->symbols('?chain=robinhood'));
     }
 
     // --- 24h volume vs current market cap -----------------------------
@@ -618,59 +597,55 @@ class RecentlyCrossedTest extends TestCase
     // --- empirical reference-set compatibility -------------------------
 
     /**
-     * Each of the 9 supplied real-world survivors, shaped to its observed
-     * market metrics and forced to age ≤ 30d, MUST clear the calibrated
-     * profile. #5 (WBNB — MC $1.2B, ~3y old, a wrapped gas token) is
-     * deliberately excluded: it violates the spec's own fixed age ≤ 30d and
-     * peak < $1B bands. Holder counts are unavailable for the 3 Robinhood
-     * tokens (no security-provider coverage) — those pass the holder gate
-     * vacuously and the risk gate via the unsupported-chain data-gap rule.
+     * The 5 COVERED-CHAIN survivors from the 9-token reference set, shaped to
+     * their observed metrics and forced to age ≤ 30d, MUST clear the calibrated
+     * profile. Excluded: #5 (WBNB — MC $1.2B, ~3y, violates the fixed bands) and
+     * the 3 Robinhood tokens (CASHCAT / Juggernaut / AI) — Robinhood is
+     * unscreenable, so after the pippo incident it is correctly rejected.
+     * Bicat's peak is old (`observedPeakAt`) so it shows as COOLED, not a
+     * post-crossing collapse.
      *
-     * @return array<string, array{0:string,1:string,2:float,3:float,4:float,5:?int,6:float}>
+     * @return array<string, array{0:string,1:string,2:float,3:float,4:float,5:?int,6:float,7:int}>
      */
     public static function referenceProfiles(): array
     {
-        // name, chain, currentMc, liquidity, volume24, holders|null, observedPeak
+        // name, chain, currentMc, liquidity, volume24, holders, observedPeak, observedPeakDaysAgo
         return [
-            'apeonfone (fone) / solana' => ['fone', 'solana', 18_200_000, 748_000, 11_600_000, 27_726, 22_000_000],
-            'CASHCAT / robinhood' => ['CASHCAT', 'robinhood', 258_000_000, 4_490_000, 9_490_000, null, 300_000_000],
-            'The Juggernaut / robinhood' => ['JUGGERNAUT', 'robinhood', 6_950_000, 511_000, 1_980_000, null, 12_000_000],
-            'Artificial Inu (AI) / robinhood' => ['AI', 'robinhood', 217_000_000, 5_280_000, 31_200_000, null, 260_000_000],
-            'MarsCoin / bsc' => ['MARS', 'bsc', 66_700_000, 1_250_000, 4_210_000, 36_817, 90_000_000],
-            'Catecoin (CATE) / solana' => ['CATE', 'solana', 33_900_000, 1_760_000, 4_510_000, 117_971, 45_000_000],
-            '牛来 (NiuLai) / bsc' => ['NIULAI', 'bsc', 72_600_000, 1_200_000, 2_530_000, 52_625, 89_000_000],
-            'Bicat / bsc (COOLED)' => ['BICAT', 'bsc', 160_000, 50_600, 119_000, 4_166, 9_000_000],
+            'apeonfone (fone) / solana' => ['fone', 'solana', 18_200_000, 748_000, 11_600_000, 27_726, 22_000_000, 4],
+            'MarsCoin / bsc' => ['MARS', 'bsc', 66_700_000, 1_250_000, 4_210_000, 36_817, 90_000_000, 20],
+            'Catecoin (CATE) / solana' => ['CATE', 'solana', 33_900_000, 1_760_000, 4_510_000, 117_971, 45_000_000, 12],
+            '牛来 (NiuLai) / bsc' => ['NIULAI', 'bsc', 72_600_000, 1_200_000, 2_530_000, 52_625, 89_000_000, 6],
+            'Bicat / bsc (COOLED)' => ['BICAT', 'bsc', 160_000, 50_600, 119_000, 4_166, 9_000_000, 20],
         ];
     }
 
     #[Test]
     #[DataProvider('referenceProfiles')]
-    public function every_reference_survivor_clears_the_calibrated_profile(
+    public function every_covered_chain_reference_survivor_clears_the_calibrated_profile(
         string $symbol,
         string $chain,
         float $currentMc,
         float $liquidity,
         float $volume,
-        ?int $holders,
+        int $holders,
         float $observedPeak,
+        int $observedPeakDaysAgo,
     ): void {
-        $covered = array_key_exists($chain, config('risk.goplus_chain_map'));
-
         $token = $this->token(
             [
                 'symbol' => $symbol,
                 'chain_id' => $chain,
                 'earliest_pair_created_at' => $this->now->subDays(15), // force ≤ 30d
                 'observed_peak_market_cap' => $observedPeak,
+                'observed_peak_market_cap_at' => $this->now->subDays($observedPeakDaysAgo),
             ],
             [
                 'market_cap' => $currentMc,
                 'volume_h24' => $volume,
                 'liquidity_usd' => $liquidity,
+                'price_change_h24' => -8.0,
             ],
-            $covered
-                ? ['riskLevel' => RiskAssessment::LEVEL_LOWER, 'holders' => $holders]
-                : ['skipRisk' => true, 'skipHolders' => true],
+            ['riskLevel' => RiskAssessment::LEVEL_LOWER, 'holders' => $holders],
         );
 
         $this->crossing($token, QualificationEvent::TYPE_CURRENT_OBSERVATION, $this->now->subDays(10), $observedPeak);
@@ -678,7 +653,177 @@ class RecentlyCrossedTest extends TestCase
         $this->assertContains(
             $symbol,
             $this->symbols(),
-            "reference survivor {$symbol} was rejected by the calibrated Recently Crossed profile",
+            "reference survivor {$symbol} was rejected by the Recently Crossed profile",
         );
+    }
+
+    #[Test]
+    public function the_three_robinhood_reference_survivors_are_now_excluded(): void
+    {
+        // CASHCAT / Juggernaut / Artificial Inu — mature, healthy, but on an
+        // unscreenable chain. Accepted trade-off of the pippo-incident revert.
+        foreach ([
+            ['CASHCAT', 258_000_000.0, 4_490_000.0, 9_490_000.0, 300_000_000.0],
+            ['JUGGERNAUT', 6_950_000.0, 511_000.0, 1_980_000.0, 12_000_000.0],
+            ['AI', 217_000_000.0, 5_280_000.0, 31_200_000.0, 260_000_000.0],
+        ] as [$symbol, $mc, $liq, $vol, $peak]) {
+            $token = $this->token(
+                ['symbol' => $symbol, 'chain_id' => 'robinhood', 'observed_peak_market_cap' => $peak],
+                ['market_cap' => $mc, 'liquidity_usd' => $liq, 'volume_h24' => $vol, 'price_change_h24' => -5.0],
+                ['skipRisk' => true, 'skipHolders' => true],
+            );
+            $this->crossing($token, QualificationEvent::TYPE_CURRENT_OBSERVATION, $this->now->subDays(10), $peak);
+        }
+
+        $this->assertSame([], $this->symbols('?chain=robinhood'));
+    }
+
+    // --- red-flag gates (2026-09 pippo incident) ----------------------
+
+    #[Test]
+    public function extreme_positive_24h_momentum_is_rejected(): void
+    {
+        $pump = $this->token(['symbol' => 'PUMP'], ['price_change_h24' => 400.0]);
+        $this->crossing($pump, QualificationEvent::TYPE_CURRENT_OBSERVATION, $this->now->subHours(2));
+
+        $calm = $this->token(['symbol' => 'CALM'], ['price_change_h24' => 180.0]);
+        $this->crossing($calm, QualificationEvent::TYPE_CURRENT_OBSERVATION, $this->now->subHours(2));
+
+        $this->assertSame(['CALM'], $this->symbols());
+    }
+
+    #[Test]
+    public function a_calm_or_negative_24h_move_still_passes(): void
+    {
+        $token = $this->token(['symbol' => 'DOWN'], ['price_change_h24' => -19.9]);
+        $this->crossing($token, QualificationEvent::TYPE_CURRENT_OBSERVATION, $this->now->subDays(3));
+
+        $this->assertSame(['DOWN'], $this->symbols());
+    }
+
+    #[Test]
+    public function a_missing_24h_change_is_not_treated_as_a_red_flag(): void
+    {
+        $token = $this->token(['symbol' => 'NOCHG'], ['price_change_h24' => null]);
+        $this->crossing($token, QualificationEvent::TYPE_CURRENT_OBSERVATION, $this->now->subDays(3));
+
+        $this->assertSame(['NOCHG'], $this->symbols());
+    }
+
+    #[Test]
+    public function a_post_crossing_collapse_within_the_lookback_is_rejected(): void
+    {
+        // pippo: $12.4M peak ~1h ago -> $1,300 now.
+        $token = $this->token(
+            [
+                'symbol' => 'RUG',
+                'observed_peak_market_cap' => 12_400_000.0,
+                'observed_peak_market_cap_at' => $this->now->subHours(1),
+            ],
+            ['market_cap' => 1_300.0, 'volume_h24' => 900_000.0, 'liquidity_usd' => 120_000.0, 'price_change_h24' => -2.0],
+        );
+        $this->crossing($token, QualificationEvent::TYPE_CURRENT_OBSERVATION, $this->now->subHours(1), 12_400_000.0);
+
+        $this->assertSame([], $this->symbols());
+    }
+
+    #[Test]
+    public function a_peak_older_than_the_lookback_still_shows_as_cooled(): void
+    {
+        $token = $this->token(
+            [
+                'symbol' => 'OLDCOOL',
+                'observed_peak_market_cap' => 12_000_000.0,
+                'observed_peak_market_cap_at' => $this->now->subDays(6), // > 72h
+            ],
+            ['market_cap' => 900_000.0, 'volume_h24' => 40_000.0, 'liquidity_usd' => 90_000.0, 'price_change_h24' => -3.0],
+        );
+        $this->crossing($token, QualificationEvent::TYPE_CURRENT_OBSERVATION, $this->now->subDays(5), 12_000_000.0);
+
+        $res = $this->getJson('/api/memecoins/recently-crossed')->assertOk();
+        $res->assertJsonPath('data.0.symbol', 'OLDCOOL');
+        $res->assertJsonPath('data.0.status', 'COOLED');
+    }
+
+    #[Test]
+    public function a_shallow_pullback_from_a_recent_peak_still_passes(): void
+    {
+        // 0.72 of a peak reached 6h ago — a normal wobble, not a collapse.
+        $token = $this->token(
+            [
+                'symbol' => 'WOBBLE',
+                'observed_peak_market_cap' => 25_000_000.0,
+                'observed_peak_market_cap_at' => $this->now->subHours(6),
+            ],
+            ['market_cap' => 18_000_000.0, 'volume_h24' => 2_000_000.0, 'liquidity_usd' => 800_000.0, 'price_change_h24' => -12.0],
+        );
+        $this->crossing($token, QualificationEvent::TYPE_CURRENT_OBSERVATION, $this->now->subHours(6));
+
+        $this->assertSame(['WOBBLE'], $this->symbols());
+    }
+
+    /**
+     * @return array<string, array{0:string,1:array<string,mixed>,2:array<string,mixed>}>
+     */
+    public static function pumpAndDumpProfiles(): array
+    {
+        return [
+            // Liquidity bumped over the $10K floor so the COLLAPSE gate (not the
+            // liquidity gate) is what does the work here.
+            'PIPPO — collapsed' => ['PIPPO', ['observed_peak_market_cap' => 12_398_995.0], ['market_cap' => 1_299.0, 'liquidity_usd' => 120_000.0, 'volume_h24' => 895_118.0, 'price_change_h24' => -1.0]],
+            'FAMI — momentum' => ['FAMI', ['observed_peak_market_cap' => 35_953_388.0], ['market_cap' => 18_199_829.0, 'liquidity_usd' => 230_467.0, 'volume_h24' => 8_215_193.0, 'price_change_h24' => 307.0]],
+            'JINQIAN — momentum' => ['JINQIAN', ['observed_peak_market_cap' => 48_838_745.0], ['market_cap' => 14_025_438.0, 'liquidity_usd' => 394_491.0, 'volume_h24' => 6_544_723.0, 'price_change_h24' => 2_689.0]],
+        ];
+    }
+
+    #[Test]
+    #[DataProvider('pumpAndDumpProfiles')]
+    public function pump_and_dump_reference_profiles_are_all_rejected(string $symbol, array $attrs, array $snapshot): void
+    {
+        // Even hypothetically on a COVERED chain (so the unscreenable-chain gate
+        // does not do the work) the momentum / collapse gates catch them.
+        $token = $this->token(
+            array_replace(['symbol' => $symbol, 'chain_id' => 'bsc', 'observed_peak_market_cap_at' => $this->now->subHours(1)], $attrs),
+            $snapshot,
+        );
+        $this->crossing($token, QualificationEvent::TYPE_CURRENT_OBSERVATION, $this->now->subHours(1), (float) $attrs['observed_peak_market_cap']);
+
+        $this->assertSame([], $this->symbols());
+    }
+
+    #[Test]
+    public function the_min_age_hours_lever_is_off_by_default_and_can_be_set(): void
+    {
+        $young = $this->token(['symbol' => 'FRESH', 'earliest_pair_created_at' => $this->now->subHours(3)]);
+        $this->crossing($young, QualificationEvent::TYPE_CURRENT_OBSERVATION, $this->now->subHours(2));
+
+        // Default (0) — a 3-hour-old pair is fine on its own.
+        $this->assertSame(['FRESH'], $this->symbols());
+
+        // Operator sets a 6h floor.
+        config()->set('dexscreener.recent_crossing.min_age_hours', 6);
+        $this->assertSame([], $this->symbols());
+    }
+
+    #[Test]
+    public function two_records_of_the_same_ticker_collapse_to_the_saner_one(): void
+    {
+        // Same (chain, symbol, name), different contracts. The "real" one has a
+        // deeper relative-liquidity structure; the copycat is thin.
+        $real = $this->token(
+            ['symbol' => 'DUPE', 'name' => 'Dupe Coin', 'token_address' => 'RealAddr1', 'observed_peak_market_cap' => 40_000_000.0],
+            ['market_cap' => 30_000_000.0, 'liquidity_usd' => 1_200_000.0, 'volume_h24' => 900_000.0],
+        );
+        $this->crossing($real, QualificationEvent::TYPE_CURRENT_OBSERVATION, $this->now->subDays(4), 40_000_000.0);
+
+        $copycat = $this->token(
+            ['symbol' => 'DUPE', 'name' => 'Dupe Coin', 'token_address' => 'CopyAddr2', 'observed_peak_market_cap' => 8_000_000.0],
+            ['market_cap' => 6_000_000.0, 'liquidity_usd' => 90_000.0, 'volume_h24' => 200_000.0],
+        );
+        $this->crossing($copycat, QualificationEvent::TYPE_CURRENT_OBSERVATION, $this->now->subDays(2), 8_000_000.0);
+
+        $rows = $this->getJson('/api/memecoins/recently-crossed')->assertOk()->json('data');
+        $this->assertCount(1, $rows);
+        $this->assertSame($real->id, $rows[0]['id']);
     }
 }

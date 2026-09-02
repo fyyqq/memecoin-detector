@@ -10,6 +10,14 @@ namespace App\Services\Historical;
  * `qualifies` is true only when every deterministic quality gate passed.
  * `rejectReason` is one concise code (the FIRST gate that failed) — for run
  * diagnostics / tests, never shown to end users.
+ *
+ * `hardRedFlag` distinguishes a REJECT that should also REVOKE an existing
+ * "previously approved" stamp (momentum anomaly, post-crossing collapse, an
+ * unscreenable chain) from a SOFT miss (stale discovery, a gentle cool below
+ * $5M, a covered-chain HIGH/CRITICAL rescreen) which keeps the stamp so the
+ * token's Post-30-Day lineage survives. It is consulted ONLY by
+ * {@see RecentlyCrossedApprovalMarker}'s revocation pass — never by the read
+ * controller.
  */
 final readonly class RecentlyCrossedDecision
 {
@@ -29,9 +37,16 @@ final readonly class RecentlyCrossedDecision
 
     public const REASON_LIQUIDITY_TOO_THIN = 'liquidity_too_thin';
 
+    public const REASON_MOMENTUM_ANOMALY = 'momentum_anomaly';
+
+    public const REASON_POST_CROSSING_COLLAPSE = 'post_crossing_collapse';
+
+    public const REASON_TOO_YOUNG = 'too_young';
+
     private function __construct(
         public bool $qualifies,
         public ?string $rejectReason,
+        public bool $hardRedFlag = false,
     ) {}
 
     public static function pass(): self
@@ -39,8 +54,8 @@ final readonly class RecentlyCrossedDecision
         return new self(true, null);
     }
 
-    public static function reject(string $reason): self
+    public static function reject(string $reason, bool $hardRedFlag = false): self
     {
-        return new self(false, $reason);
+        return new self(false, $reason, $hardRedFlag);
     }
 }

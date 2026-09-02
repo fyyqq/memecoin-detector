@@ -158,9 +158,10 @@ return [
     | The quality gates (all PostgreSQL-only, no provider calls — see
     | App\Services\Historical\RecentlyCrossedQualifier). The three ratio floors
     | below were CALIBRATED against a 9-token empirical reference set of real
-    | survivors (see docs/recently-crossed-calibration.md) — the previous
-    | 0.001 / 0.001 / 5.0 values were placeholder assumptions ~10-100x weaker
-    | than any real survivor:
+    | survivors (see docs/recently-crossed-calibration.md); the RED-FLAG gates
+    | (momentum / collapse) were added after the 2026-09 "pippo" incident — a
+    | 2-hour-old Robinhood pair that spiked to $12.4M then rugged to $1,299 and
+    | still got listed:
     |   - discovery freshness: the discovery pipeline must have OBSERVED the
     |     token within `discovery_freshness_hours`. We persist only
     |     `last_observed_at` — NOT which feed (meta / boost / profile) surfaced
@@ -168,18 +169,17 @@ return [
     |     claim that the token is "trending".
     |   - risk screen: reuses App\Services\Risk\MainListDecision (no honeypot /
     |     cannot-buy / cannot-sell / mintable / CRITICAL / HIGH / hard override)
-    |     WITHOUT the main-list >=72h maturity gate. A RISK-UNKNOWN /
-    |     unscreened / low-completeness result rejects only on a chain our
-    |     security provider covers (`risk.goplus_chain_map`); on an unsupported
-    |     chain (e.g. `robinhood`) that is EXPECTED and does not reject by
-    |     itself — see `allow_unsupported_chain_risk_unknown`. Positive
-    |     hard-failure signals reject on every chain.
+    |     WITHOUT the main-list >=72h maturity gate. ANY risk-screen failure
+    |     rejects — INCLUDING a RISK-UNKNOWN / unscreened result on a chain our
+    |     security provider (`risk.goplus_chain_map`) does not cover (e.g.
+    |     `robinhood`): we cannot screen it, so we do not list it. (The prior
+    |     `allow_unsupported_chain_risk_unknown` bypass was removed — it let the
+    |     pippo pumps through.)
     |   - holder participation: when a MEASURED `holder_count` risk signal
     |     exists, holders / ($MC / 1e6) must be >= `min_holders_per_million_mcap`
     |     (reference survivors: 552-3,484 per $1M; anomalies like $50M / 20
-    |     holders = 0.4). A MISSING count no longer rejects by default
-    |     (`require_holder_evidence` = false) — unsupported chains cannot produce
-    |     one and 3/9 reference survivors are on such a chain. Never fabricated.
+    |     holders = 0.4). A MISSING count rejects when `require_holder_evidence`
+    |     (default true — covered chains always have one). Never fabricated.
     |   - 24h volume vs CURRENT market cap: `volume_h24 / current_market_cap`
     |     must be >= `min_volume_to_mcap_ratio` (reference survivors: 0.035-0.75;
     |     the $50M MC / $7.2K volume anomaly = 0.000144). Never FDV, never peak
@@ -187,6 +187,15 @@ return [
     |   - liquidity: `liquidity_usd` >= risk.liquidity.min_total_usd AND
     |     >= current MC * `min_liquidity_to_mcap_ratio` (reference survivors:
     |     0.016-0.32 of current MC).
+    |   - RED FLAG — momentum: reject when the token is still on a vertical, i.e.
+    |     |price_change_h24| > `max_price_change_h24_pct` (survivors: +0.6% /
+    |     -19.9% / calm; pippo/FAMI/JINQIAN: +307% .. +65,727%).
+    |   - RED FLAG — post-crossing collapse: reject when our OWN observed peak was
+    |     within the last `collapse_lookback_hours` AND current MC has fallen
+    |     below `collapse_floor_ratio` of it (pippo: $1,299 vs $12.4M ~20 min
+    |     earlier). A gentle decline weeks after the peak is still `COOLED`.
+    |   - RED FLAG — `min_age_hours` (OFF by default = 0): an operator may set a
+    |     hard pool-age floor (e.g. 6h) as an extra guard.
     */
     'recent_crossing' => [
         'hours' => max(1, (int) env('MEMECOIN_RECENT_CROSSING_HOURS', 48)),
@@ -204,10 +213,11 @@ return [
         // reject sits below it on purpose.
         'min_holders_per_million_mcap' => (float) env('MEMECOIN_RECENT_CROSSING_MIN_HOLDERS_PER_MILLION_MCAP', 25.0),
         // When true, a token with NO measured holder count is rejected. Default
-        // false: chains without security-provider coverage (e.g. robinhood)
-        // can never produce a holder count, and real survivors live there. The
-        // ratio floor above still applies whenever a count IS available.
-        'require_holder_evidence' => filter_var(env('MEMECOIN_RECENT_CROSSING_REQUIRE_HOLDER_EVIDENCE', false), FILTER_VALIDATE_BOOL),
+        // TRUE (reverted after the pippo incident): a covered chain always has a
+        // holder count, and an uncovered chain is now rejected at the risk-screen
+        // gate anyway. The ratio floor above still applies whenever a count IS
+        // available.
+        'require_holder_evidence' => filter_var(env('MEMECOIN_RECENT_CROSSING_REQUIRE_HOLDER_EVIDENCE', true), FILTER_VALIDATE_BOOL),
 
         // 24h volume must be at least this fraction of CURRENT market cap.
         // Calibrated: weakest reference survivor = 0.035; 0.01 keeps a ~3.5x
@@ -221,13 +231,25 @@ return [
         // "high MC / negligible liquidity" shape.
         'min_liquidity_to_mcap_ratio' => (float) env('MEMECOIN_RECENT_CROSSING_MIN_LIQUIDITY_TO_MCAP_RATIO', 0.005),
 
-        // A RISK-UNKNOWN / unscreened / low-completeness risk result rejects a
-        // token only on a chain our security provider (`risk.goplus_chain_map`)
-        // actually covers. On an unsupported chain that outcome is expected and
-        // does NOT reject by itself — positive hard-failure signals (honeypot,
-        // cannot-buy, cannot-sell, mintable, CRITICAL, HIGH, hard override)
-        // still reject everywhere.
-        'allow_unsupported_chain_risk_unknown' => filter_var(env('MEMECOIN_RECENT_CROSSING_ALLOW_UNSUPPORTED_CHAIN_RISK_UNKNOWN', true), FILTER_VALIDATE_BOOL),
+        // RED FLAG — momentum ceiling. |price_change_h24| (a DexScreener percent,
+        // 307.0 = +307%) above this reads as "pump still in progress / just
+        // dumped" — wait for it to settle. Reference survivors are +0.6% /
+        // -19.9% / calm; FAMI's smallest observed was +307%. A `null` change is
+        // a data gap, not a red flag.
+        'max_price_change_h24_pct' => (float) env('MEMECOIN_RECENT_CROSSING_MAX_PRICE_CHANGE_H24_PCT', 250.0),
+
+        // RED FLAG — post-crossing collapse. If OUR observed peak
+        // (`tokens.observed_peak_market_cap_at`) is within this many hours AND
+        // current MC < peak * collapse_floor_ratio, the token spiked and dumped
+        // — reject. Outside this window a decline is a trend (still `COOLED`),
+        // not a rug.
+        'collapse_lookback_hours' => max(1, (int) env('MEMECOIN_RECENT_CROSSING_COLLAPSE_LOOKBACK_HOURS', 72)),
+        'collapse_floor_ratio' => (float) env('MEMECOIN_RECENT_CROSSING_COLLAPSE_FLOOR_RATIO', 0.35),
+
+        // RED FLAG — optional hard pool-age floor. 0 = disabled (the default —
+        // membership is purely red-flag-driven). Set e.g. 6 to also reject any
+        // pair younger than 6 hours.
+        'min_age_hours' => max(0, (int) env('MEMECOIN_RECENT_CROSSING_MIN_AGE_HOURS', 0)),
     ],
 
     /*

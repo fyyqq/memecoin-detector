@@ -639,16 +639,19 @@ creates a crossing event. Optional `?chain=`; `meta.days` (30). A memecoin
 appears only when it passes **every** gate: representative crossing within the
 last **30 days** (`recent_crossing.window_days`) · pool age ≤ 30d (separate) ·
 verified/observed peak in `[$5M, $1B)` · discovery freshness
-(`last_observed_at` fresh — "recently observed", never "trending") · risk screen
-(no positive hard-failure on any chain; RISK UNKNOWN rejects only on a
-provider-covered chain — `risk.goplus_chain_map`) · holder participation ≥ **25**
-per $1M current MC (when measured) · 24h volume ≥ **1%** of current MC (rejects
-`$50M MC / $7.2K volume`) · liquidity ≥ $10K AND ≥ **0.5%** of current MC. The
-three ratio floors were **calibrated against a 9-token empirical reference
-set** — see [recently-crossed-calibration.md](recently-crossed-calibration.md).
-Gates live in `App\Services\Historical\RecentlyCrossedQualifier`. A token with
-current MC **below `$5M`** still appears (`COOLED`) — it previously crossed.
-Newest crossing first. See [qualification-events.md](qualification-events.md).
+(`last_observed_at` fresh — "recently observed", never "trending") · **chain is
+screenable** (absent from `risk.goplus_chain_map`, e.g. `robinhood` → excluded)
+· risk screen (any failure rejects) · holder participation ≥ **25** per $1M
+current MC (when measured; a MISSING count rejects) · 24h volume ≥ **1%** of
+current MC (rejects `$50M MC / $7.2K volume`) · liquidity ≥ $10K AND ≥ **0.5%**
+of current MC · **RED FLAG — momentum** (`|price_change_h24|` ≤ **250%**) ·
+**RED FLAG — post-crossing collapse** (recent observed peak + current MC < 35%
+of it). The ratio floors were **calibrated against a 9-token reference set**;
+the red-flag gates were added after the 2026-09 pippo incident — see
+[recently-crossed-calibration.md](recently-crossed-calibration.md). Same-ticker
+squatters collapse to one row (`SameTickerCollapser`). A token with current MC
+**below `$5M`** still appears (`COOLED`) — it previously crossed. Newest
+crossing first. See [qualification-events.md](qualification-events.md).
 
 ```jsonc
 {
@@ -704,16 +707,19 @@ ties break on peak market cap then token id. ≤ 500 rows fetched then sorted in
 PHP (same pattern as `GET /api/memecoins`). `App\Http\Controllers\Api\PostThirtyDayController`
 + `Token::scopePostThirtyDayTracked`.
 
-**The marker** — `php artisan memecoins:mark-recently-crossed`, scheduled
-`7,17,27,37,47,57 * * * *` (discovery cadence, offset AFTER `memecoins:screen-risk`
-so the risk gate sees fresh data, BEFORE the evidence offset;
-`withoutOverlapping`; reuses the `scheduler` container). `RecentlyCrossedApprovalMarker`
-evaluates the **identical** Recently Crossed predicate (the shared candidate
-scope + representative-crossing-in-window + `RecentlyCrossedQualifier`) and
-stamps `recently_crossed_qualified_at = now()` for each passing token whose
-column is still null. Written once, **never cleared, never rewritten**. It
-touches only that one column — never qualification, `observed_peak_market_cap`,
-pump events, evidence or risk.
+**The marker** — `php artisan memecoins:mark-recently-crossed [--dry-run]`,
+scheduled `7,17,27,37,47,57 * * * *` (discovery cadence, offset AFTER
+`memecoins:screen-risk`, BEFORE the evidence offset; `withoutOverlapping`;
+reuses the `scheduler` container). `RecentlyCrossedApprovalMarker` evaluates the
+**identical** Recently Crossed predicate (the shared candidate scope +
+representative-crossing-in-window + `RecentlyCrossedQualifier`). Two passes:
+**STAMP** `recently_crossed_qualified_at` for each newly-passing token (one per
+same-ticker group); **REVOKE** — a stamped token whose crossing is still
+in-window that now trips a HARD red flag (`RecentlyCrossedQualifier::redFlag()`
+— momentum / post-crossing collapse / unscreenable chain) has its stamp nulled
+and `recently_crossed_revoked_at` / `_reason` recorded (never re-stamped); a
+SOFT miss keeps the stamp. It touches only those columns — never qualification,
+`observed_peak_market_cap`, pump events, evidence or risk.
 
 **Why the frontend never calls DexScreener:** a discovery run takes 15–30 s and
 hits rate-limited endpoints. The browser must stay fast and must not multiply
@@ -1169,7 +1175,8 @@ docker compose exec postgres createdb -U memecoin memecoin_test
 | `Services\Historical\QualificationEventRecorder` | Step 20 — upserts `qualification_events` rows for tokens whose evidence proves a verified/observed crossing in `[$5M, $1B)`. One batch pre-load query; idempotent. Pipeline-only. |
 | `Http\Controllers\Api\RecentlyCrossedController` | Step 20 — `GET /api/memecoins/recently-crossed`. Read-only, PostgreSQL only. DB filters = `Token::scopeRecentlyCrossedListingCandidate`. |
 | `Http\Controllers\Api\PostThirtyDayController` | Post-30-Day tracking — `GET /api/memecoins/post-30-day`. Read-only, PostgreSQL only. `Token::scopePostThirtyDayTracked` (marker stamped + age > 30d) + `?chain=` / `?sort=` / `?direction=`, deterministic sort (nulls last, tie-break peak MC then id). |
-| `Services\Historical\RecentlyCrossedApprovalMarker` | Post-30-Day tracking — reuses the shared candidate scope + `RecentlyCrossedQualifier` to stamp `tokens.recently_crossed_qualified_at` once per passing token. `memecoins:mark-recently-crossed` only; never cleared. |
+| `Services\Historical\RecentlyCrossedApprovalMarker` | Post-30-Day tracking — reuses the shared candidate scope + `RecentlyCrossedQualifier`. STAMP pass: `tokens.recently_crossed_qualified_at` once per same-ticker group. REVOKE pass: nulls the stamp (`recently_crossed_revoked_at` / `_reason`) when an in-window stamped token trips a HARD red flag (`redFlag()`); a SOFT miss keeps it. `memecoins:mark-recently-crossed [--dry-run]` only. |
+| `Services\Historical\SameTickerCollapser` | Collapses ticker/name-squatting duplicates (3× "JINQIAN / Money Mushroom" on robinhood, etc.) to one row/stamp per `(chain, symbol, name)` — highest `liquidity/market_cap` ratio capped at 0.5, tie-break longer history → earliest first-seen → id. Used by `RecentlyCrossedController` + the marker. |
 | `Services\Narrative\NarrativeResearchService` | Step 21 — orchestrates one narrative run: collect sources (origin + popularity) via `NarrativeResearchProvider`s, rank + persist them, ask the `NarrativeExplanationProvider`, validate each section independently, persist the report. Cooldown / partial / provider-failure isolation. Command-only. |
 | `Services\Narrative\{TokenOriginResearchService,TokenPopularityResearchService,NarrativeSourceRanker,NarrativeEvidenceRecorder,NarrativeExplanationService,NarrativeExplanationValidator}` | Step 21 support — source collection, quality tiering, idempotent persistence, AI call + validation. |
 | `Services\Narrative\Providers\{InternalEvidenceResearchProvider,GdeltNarrativeResearchProvider,AnthropicNarrativeExplanationProvider,NullNarrativeExplanationProvider}` | Step 21 providers — the always-on internal baseline, token-level GDELT, and the swappable AI vendor (chosen by `NARRATIVE_AI_PROVIDER`, separate binding). |

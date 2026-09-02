@@ -178,6 +178,26 @@
 > $1B / age bands, Post-30-Day structure, or Monthly Top Memecoins (which no
 > longer exists). Full analysis:
 > [recently-crossed-calibration.md](recently-crossed-calibration.md).
+>
+> **Update 2026-09-03 (9th — Recently Crossed red-flag gates, "pippo"
+> incident):** days after the 8th update, the section filled with 1–5 hour-old
+> Robinhood pump-and-dumps (pippo spiked to $12.4M then rugged to $1,299, still
+> got stamped). The 8th update's two relaxations were the cause and were
+> **reverted**: `require_holder_evidence` → true; the
+> `allow_unsupported_chain_risk_unknown` bypass **deleted** — a chain absent
+> from `risk.goplus_chain_map` (e.g. `robinhood`) is now **excluded** from
+> Recently Crossed (accepted: the 3 mature Robinhood survivors go too). Added
+> (binary, no score): **RED FLAG — momentum** (`|price_change_h24|` ≤ 250),
+> **RED FLAG — post-crossing collapse** (recent observed peak + current MC < 35%
+> of it), optional `min_age_hours` (default 0), and `SameTickerCollapser` (one
+> row per `(chain, symbol, name)` — collapses ticker squatters). The marker
+> gained a **revocation pass**: a stamped token that trips a HARD red flag while
+> its crossing is in-window has `recently_crossed_qualified_at` nulled
+> (`recently_crossed_revoked_at` / `_reason` — migration `2026_09_03_000001`) so
+> it never reaches Post-30-Day; a SOFT miss keeps the stamp. `MainListDecision`,
+> the risk screener, `GET /api/memecoins`, discovery and the $5M/$1B/age bands
+> are unchanged. `memecoins:mark-recently-crossed` gains `--dry-run`. Full
+> analysis: [recently-crossed-calibration.md](recently-crossed-calibration.md).
 
 ---
 

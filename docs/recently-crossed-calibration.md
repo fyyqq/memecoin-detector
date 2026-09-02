@@ -157,9 +157,84 @@ for transparency, never "safe".
   statistics. Every threshold is intentionally an order of magnitude looser than
   the observed survivor floor, and every value is env-configurable.
 - **GoPlus was unreachable** from the calibration environment; security was read
-  from GeckoTerminal. Robinhood has **no** coverage in either provider — the
-  RISK-UNKNOWN / missing-holder rules were changed to be honest about that, not
-  to weaken any positive safety check.
+  from GeckoTerminal. Robinhood has **no** coverage in either provider.
 - **Peak market cap** is not directly observable from DexScreener; for tokens
   currently above `$5M` the crossing is self-evident, and Bicat (currently
   `$160K`) is a `COOLED` survivor that must have peaked in-band.
+
+---
+
+# Red-flag rejection gates — 2026-09 "pippo" incident
+
+## What went wrong
+
+Days after the calibration above shipped, the section filled with
+**1–5 hour-old Robinhood pump-and-dumps** (FAMI, JINQIAN, pippo). **pippo**
+(`robinhood`, `0x61A858B42E68A7c381baf0C9B4B75d3b560CA995`) is the case study: a
+2-hour-old pair that spiked to **$12.4M** market cap, got stamped
+`recently_crossed_qualified_at` at its peak, then rugged to **$1,299** within
+~15 minutes.
+
+Root cause: the calibration set was **all survivors, all 6–75 days old, all
+calm**. It had:
+- no "should be rejected" examples — so the reject side was uncalibrated;
+- no *young* examples — so nothing warned that the section has no minimum-age
+  gate;
+- no *pumping* examples — so nothing warned that a coin still on a vertical
+  passes every ratio floor.
+
+And two of its own relaxations made it worse: `require_holder_evidence` false and
+an `allow_unsupported_chain_risk_unknown` bypass — both to accommodate the 3
+Robinhood survivors — let every Robinhood pump through, because Robinhood has no
+security or holder provider.
+
+## What separates a pump from a survivor
+
+Not the MC/liquidity ratio — real survivors are 42–62:1, pippo's peak was 49:1.
+The clean discriminators are **age** (2h vs ≥ 6d) and **momentum**:
+
+| | 24h price move | current MC vs recent peak |
+|---|---|---|
+| pippo / FAMI / JINQIAN | +307% … +65,727% | collapsed (pippo 0.0001 of peak) |
+| every survivor | +0.6% … −19.9% | 0.78–0.83 of peak |
+
+## The fix (binary in/out — no score, no UI tiers)
+
+1. **Reverted the calibration's two relaxations.** `require_holder_evidence`
+   back to **true**; the `allow_unsupported_chain_risk_unknown` bypass **deleted**.
+   A chain absent from `config('risk.goplus_chain_map')` (e.g. `robinhood`) is
+   now **excluded** — we cannot rule out a honeypot / mint / blacklist there.
+   Accepted trade-off: the 3 mature Robinhood survivors (CASHCAT / Juggernaut /
+   AI) are re-excluded.
+2. **RED FLAG — momentum.** Reject when `|price_change_h24| >
+   max_price_change_h24_pct` (**250**). Survivors ±20%; the pumps +307%+.
+3. **RED FLAG — post-crossing collapse.** Reject when OUR observed peak
+   (`tokens.observed_peak_market_cap_at`) is within `collapse_lookback_hours`
+   (**72**) AND current MC `< observed_peak_market_cap * collapse_floor_ratio`
+   (**0.35**). A gentle decline weeks after the peak is still `COOLED`
+   (Bicat: peak was weeks ago → untouched).
+4. **Optional `min_age_hours`** (default **0** = off) — an operator lever, e.g.
+   set 6 for a hard 6-hour floor.
+5. **Same-ticker collapse** (`SameTickerCollapser`). Ticker/name squatters — 3
+   separate "JINQIAN / Money Mushroom" contracts on Robinhood, 2 dead $6K "牛来"
+   copycats — collapse to one row per `(chain, symbol, name)`: the record with
+   the highest `liquidity/market_cap` ratio **capped at 0.5** (so a dead
+   balanced-but-tiny copycat can't win), tie-break longer history → earlier
+   first-seen → lowest id.
+
+Thresholds 2–4 are precautionary (no covered-chain pump example exists) —
+expect to re-tune when one appears. FAMI's +307% is only 1.23× above the 250
+momentum ceiling; 200 would be defensible too.
+
+## Stamp revocation
+
+`recently_crossed_qualified_at` was "written once, never cleared". Now
+`memecoins:mark-recently-crossed` runs a **revocation pass**: a stamped token
+whose crossing is still inside the 30-day window and that now trips a **HARD**
+red flag (momentum / collapse / unscreenable chain) has its stamp **nulled** and
+the reason recorded in `recently_crossed_revoked_at` /
+`recently_crossed_revoked_reason` (so it drops out of Post-30-Day too, and is
+never re-stamped). A **SOFT** miss (gentle cool below `$5M`, stale discovery, a
+covered-chain HIGH/CRITICAL rescreen) still **keeps** the stamp — that lineage
+is the whole point of Post-30-Day. `memecoins:mark-recently-crossed --dry-run`
+previews both passes.
