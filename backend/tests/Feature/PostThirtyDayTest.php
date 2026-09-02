@@ -276,6 +276,43 @@ class PostThirtyDayTest extends TestCase
         $this->assertSame('pending', $rows[0]['risk_status']);
     }
 
+    #[Test]
+    public function a_previously_approved_robinhood_token_continues_into_post_thirty_day(): void
+    {
+        // The CASHCAT / Juggernaut / Artificial Inu case: a Robinhood survivor
+        // that passed Recently Crossed while young (its chain has no risk
+        // provider, so it was approved via the unsupported-chain data-gap rule)
+        // and is now well past 30 days.
+        $token = Token::query()->create([
+            'chain_id' => 'robinhood',
+            'token_address' => 'Addr'.Str::random(24),
+            'symbol' => 'CASHCAT',
+            'name' => 'Cash Cat',
+            'earliest_pair_created_at' => $this->now->subDays(75),
+            'first_observed_at' => $this->now->subDays(75),
+            'last_observed_at' => $this->now,
+            'recently_crossed_qualified_at' => $this->now->subDays(50),
+            'observed_peak_market_cap' => 300_000_000.0,
+        ]);
+        $token->marketSnapshots()->create([
+            'observed_at' => $this->now,
+            'price_usd' => 0.26,
+            'market_cap' => 258_000_000.0,
+            'fdv' => 258_000_000.0,
+            'liquidity_usd' => 4_490_000.0,
+            'volume_h24' => 9_490_000.0,
+            'txns_h24' => 5_800,
+            'primary_pair_address' => 'p',
+            'primary_dex_id' => 'uniswap',
+            'earliest_pair_created_at' => $this->now->subDays(75),
+        ]);
+
+        $rows = $this->rows('?chain=robinhood');
+        $this->assertSame(['CASHCAT'], array_map(static fn ($r) => $r['symbol'], $rows));
+        $this->assertNull($rows[0]['risk_level']);
+        $this->assertSame('pending', $rows[0]['risk_status']);
+    }
+
     // --- chain filter ---------------------------------------------------
 
     #[Test]

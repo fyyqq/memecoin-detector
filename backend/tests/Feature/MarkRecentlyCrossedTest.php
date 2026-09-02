@@ -43,13 +43,18 @@ class MarkRecentlyCrossedTest extends TestCase
         config()->set('dexscreener.filters.max_age_days', 30);
         config()->set('dexscreener.recent_crossing.window_days', 30);
         config()->set('dexscreener.recent_crossing.discovery_freshness_hours', 48);
-        config()->set('dexscreener.recent_crossing.min_holders_per_million_mcap', 5.0);
-        config()->set('dexscreener.recent_crossing.require_holder_evidence', true);
-        config()->set('dexscreener.recent_crossing.min_volume_to_mcap_ratio', 0.001);
-        config()->set('dexscreener.recent_crossing.min_liquidity_to_mcap_ratio', 0.001);
+        // Calibrated thresholds (see docs/recently-crossed-calibration.md).
+        config()->set('dexscreener.recent_crossing.min_holders_per_million_mcap', 25.0);
+        config()->set('dexscreener.recent_crossing.require_holder_evidence', false);
+        config()->set('dexscreener.recent_crossing.min_volume_to_mcap_ratio', 0.01);
+        config()->set('dexscreener.recent_crossing.min_liquidity_to_mcap_ratio', 0.005);
+        config()->set('dexscreener.recent_crossing.allow_unsupported_chain_risk_unknown', true);
         config()->set('risk.liquidity.min_total_usd', 10_000.0);
         config()->set('risk.main_list.require_screening', true);
         config()->set('risk.min_data_completeness', 0.5);
+        config()->set('risk.goplus_chain_map', [
+            'ethereum' => '1', 'bsc' => '56', 'base' => '8453', 'solana' => 'solana',
+        ]);
     }
 
     protected function tearDown(): void

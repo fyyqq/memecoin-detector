@@ -653,21 +653,31 @@ Explicitly **excluded** from Sprint 1:
   derived from current MC; SEPARATE from the ≤ 30d pool-age gate) · verified/
   observed peak in `[$5M, $1B)` (real MC, never FDV) · **discovery freshness**
   (`last_observed_at` within `MEMECOIN_RECENT_CROSSING_DISCOVERY_FRESHNESS_HOURS`
-  48h — the only persisted token-level "still discovered" signal; we don't store
-  which feed surfaced a token) · **risk screen** (`MainListDecision` with
-  `requireMaturity: false` — LOWER/MEDIUM, screening completed, completeness OK,
-  no CRITICAL/HIGH hard override; no honeypot / cannot-buy / cannot-sell /
-  mintable / …; unscreened + `RISK UNKNOWN` rejected) · **holder participation**
-  (a MEASURED `holder_count` signal required; `holders / (currentMc/1e6)` ≥
-  `MEMECOIN_RECENT_CROSSING_MIN_HOLDERS_PER_MILLION_MCAP` 5) · **24h volume vs
-  CURRENT MC** (`volume_h24 / current_market_cap` ≥
-  `MEMECOIN_RECENT_CROSSING_MIN_VOLUME_TO_MCAP_RATIO` 0.001 — rejects `$50M MC /
-  $7.2K vol`; zero/missing vol rejected; high vol never rejected) · **liquidity**
-  (≥ `MEMECOIN_RISK_MIN_LIQUIDITY_USD` AND ≥ currentMc ×
-  `MEMECOIN_RECENT_CROSSING_MIN_LIQUIDITY_TO_MCAP_RATIO` 0.001). Gates 4–8 live in
-  `App\Services\Historical\RecentlyCrossedQualifier` (deterministic). **A token
-  with current MC below $5M still appears** (`COOLED`) — the floor is a peak
-  rule. Rows carry `status` `ACTIVE`/`COOLED` — never alarmist, never says
+  48h — the only persisted token-level "recently observed by discovery" signal;
+  NEVER phrased as "trending"; we don't store which feed surfaced a token) ·
+  **risk screen** (`MainListDecision` with `requireMaturity: false` — a positive
+  hard-failure signal (honeypot / cannot-buy / cannot-sell / mintable / CRITICAL
+  / HIGH / recorded hard override) rejects on **every** chain; a RISK UNKNOWN /
+  unscreened / low-completeness result rejects **only** on a chain in
+  `config('risk.goplus_chain_map')` — on an uncovered chain (e.g. `robinhood`)
+  that is expected and does not reject by itself,
+  `MEMECOIN_RECENT_CROSSING_ALLOW_UNSUPPORTED_CHAIN_RISK_UNKNOWN`=true) · **holder
+  participation** (when a MEASURED `holder_count` signal exists,
+  `holders / (currentMc/1e6)` ≥ `MEMECOIN_RECENT_CROSSING_MIN_HOLDERS_PER_MILLION_MCAP`
+  **25** — calibrated; a MISSING count rejects only when
+  `MEMECOIN_RECENT_CROSSING_REQUIRE_HOLDER_EVIDENCE`=true, now **false** by
+  default) · **24h volume vs CURRENT MC** (`volume_h24 / current_market_cap` ≥
+  `MEMECOIN_RECENT_CROSSING_MIN_VOLUME_TO_MCAP_RATIO` **0.01** — calibrated;
+  rejects `$50M MC / $7.2K vol` = 0.000144; zero/missing vol rejected; high vol
+  never rejected) · **liquidity** (≥ `MEMECOIN_RISK_MIN_LIQUIDITY_USD` $10K AND ≥
+  currentMc × `MEMECOIN_RECENT_CROSSING_MIN_LIQUIDITY_TO_MCAP_RATIO` **0.005** —
+  calibrated). Gates 4–8 live in `App\Services\Historical\RecentlyCrossedQualifier`
+  (deterministic). The three ratio floors were **calibrated against a 9-token
+  empirical reference set** — see
+  [docs/recently-crossed-calibration.md](docs/recently-crossed-calibration.md);
+  the old 0.001 / 0.001 / 5 values were ~10–100× weaker than any real survivor.
+  **A token with current MC below $5M still appears** (`COOLED`) — the floor is a
+  peak rule. Rows carry `status` `ACTIVE`/`COOLED` — never alarmist, never says
   "safe". `config('dexscreener.recent_crossing.*')`.
 - **Read API `GET /api/memecoins/post-30-day`** — the "📈 Post-30-Day Memecoins"
   dashboard section. Read-only, PostgreSQL only, never calls a provider, never

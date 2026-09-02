@@ -160,6 +160,24 @@
 > discovery and every other scheduled command are unchanged. The scheduler now
 > has one more `memecoins:*` command and the API one more route than the counts
 > in §1 / §7 / the route list below.
+>
+> **Update 2026-09-02 (8th — Recently Crossed calibration):** the three
+> market-quality **ratio floors** for "🔥 Recently Crossed $5M" (and, by
+> inheritance, the Post-30-Day approval marker) were re-calibrated against a
+> 9-token empirical reference set of real survivors — the old placeholder values
+> were 10–100× weaker than any real survivor. `min_volume_to_mcap_ratio`
+> 0.001 → **0.01**, `min_liquidity_to_mcap_ratio` 0.001 → **0.005**,
+> `min_holders_per_million_mcap` 5 → **25**. `require_holder_evidence`
+> true → **false** (a missing holder count no longer hard-rejects — chains
+> without security-provider coverage cannot produce one). New
+> `allow_unsupported_chain_risk_unknown` (default true): a RISK-UNKNOWN /
+> unscreened result rejects only on a chain in `risk.goplus_chain_map`; on an
+> uncovered chain (e.g. `robinhood`) it is expected and does not reject by
+> itself — **positive hard-failure signals still reject on every chain**. No
+> change to `MainListDecision`, the risk screen, `GET /api/memecoins`, the $5M /
+> $1B / age bands, Post-30-Day structure, or Monthly Top Memecoins (which no
+> longer exists). Full analysis:
+> [recently-crossed-calibration.md](recently-crossed-calibration.md).
 
 ---
 

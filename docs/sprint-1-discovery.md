@@ -639,12 +639,16 @@ creates a crossing event. Optional `?chain=`; `meta.days` (30). A memecoin
 appears only when it passes **every** gate: representative crossing within the
 last **30 days** (`recent_crossing.window_days`) · pool age ≤ 30d (separate) ·
 verified/observed peak in `[$5M, $1B)` · discovery freshness
-(`last_observed_at` fresh) · risk screen (LOWER/MEDIUM, no critical security
-failure) · holder participation vs current MC · 24h volume vs current MC (rejects
-`$50M MC / $7.2K volume`) · liquidity. Gates live in
-`App\Services\Historical\RecentlyCrossedQualifier`. A token with current MC
-**below `$5M`** still appears (`COOLED`) — it previously crossed. Newest crossing
-first. See [qualification-events.md](qualification-events.md).
+(`last_observed_at` fresh — "recently observed", never "trending") · risk screen
+(no positive hard-failure on any chain; RISK UNKNOWN rejects only on a
+provider-covered chain — `risk.goplus_chain_map`) · holder participation ≥ **25**
+per $1M current MC (when measured) · 24h volume ≥ **1%** of current MC (rejects
+`$50M MC / $7.2K volume`) · liquidity ≥ $10K AND ≥ **0.5%** of current MC. The
+three ratio floors were **calibrated against a 9-token empirical reference
+set** — see [recently-crossed-calibration.md](recently-crossed-calibration.md).
+Gates live in `App\Services\Historical\RecentlyCrossedQualifier`. A token with
+current MC **below `$5M`** still appears (`COOLED`) — it previously crossed.
+Newest crossing first. See [qualification-events.md](qualification-events.md).
 
 ```jsonc
 {

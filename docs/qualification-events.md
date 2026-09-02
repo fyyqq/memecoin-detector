@@ -211,27 +211,37 @@ A memecoin appears **only** when it satisfies ALL of:
 2. **pool age** ≤ 30 days (`earliest_pair_created_at` — separate from #1);
 3. **market cap** — verified/observed peak in `[$5M, $1B)` (real market cap,
    never FDV; floor inclusive, ceiling exclusive);
-4. **discovery freshness** — the discovery pipeline observed the token within
-   `MEMECOIN_RECENT_CROSSING_DISCOVERY_FRESHNESS_HOURS` (48h). We do **not**
-   persist which feed (trending meta / boost / profile) surfaced a token, so a
-   fresh `last_observed_at` is the honest token-level "still being
-   discovered / trending" signal — a token that fell off every discovery feed
-   goes stale here. *(Known limitation — see Future Considerations in the PR.)*
+4. **discovery freshness** — the discovery pipeline OBSERVED the token within
+   `MEMECOIN_RECENT_CROSSING_DISCOVERY_FRESHNESS_HOURS` (48h). We persist only
+   `last_observed_at` (not which feed surfaced it), so this is honestly
+   "recently observed by discovery" — never a claim the token is "trending". A
+   token that fell off every discovery feed goes stale here.
 5. **risk screen** — `App\Services\Risk\MainListDecision` with `requireMaturity:
-   false`: `risk_level ∈ {LOWER, MEDIUM}`, screening `completed`, data
-   completeness ≥ min, no CRITICAL/HIGH hard override (no honeypot / cannot-buy /
-   cannot-sell / mintable / …). An unscreened / `RISK UNKNOWN` token is rejected.
-6. **holder participation** — a MEASURED `holder_count` risk signal is required
-   (`MEMECOIN_RECENT_CROSSING_REQUIRE_HOLDER_EVIDENCE`); `holder_count /
-   (current_market_cap / 1e6)` ≥ `MEMECOIN_RECENT_CROSSING_MIN_HOLDERS_PER_MILLION_MCAP`
-   (5). Current MC, never a fabricated count.
+   false`. A **positive hard-failure** (honeypot / cannot-buy / cannot-sell /
+   mintable=true / CRITICAL / HIGH / recorded hard override) rejects on **every**
+   chain. A **RISK UNKNOWN / unscreened / low-completeness** result rejects only
+   on a chain in `config('risk.goplus_chain_map')`; on an uncovered chain (e.g.
+   `robinhood`) that outcome is expected and does not reject by itself
+   (`MEMECOIN_RECENT_CROSSING_ALLOW_UNSUPPORTED_CHAIN_RISK_UNKNOWN`, default
+   true). No change to `MainListDecision` itself or `GET /api/memecoins`.
+6. **holder participation** — when a MEASURED `holder_count` risk signal exists,
+   `holder_count / (current_market_cap / 1e6)` ≥
+   `MEMECOIN_RECENT_CROSSING_MIN_HOLDERS_PER_MILLION_MCAP` (**25** — calibrated;
+   reference survivors sit at 552–3,484). A MISSING count rejects only when
+   `MEMECOIN_RECENT_CROSSING_REQUIRE_HOLDER_EVIDENCE` is true (now **false** by
+   default). Never a fabricated count.
 7. **24h volume vs CURRENT market cap** — `volume_h24 / current_market_cap` ≥
-   `MEMECOIN_RECENT_CROSSING_MIN_VOLUME_TO_MCAP_RATIO` (0.001). Rejects e.g.
-   `$50M MC / $7.2K volume` (0.000144). Never FDV, never peak MC; high volume is
-   never a reject; zero / missing volume is a reject.
+   `MEMECOIN_RECENT_CROSSING_MIN_VOLUME_TO_MCAP_RATIO` (**0.01** — calibrated).
+   Rejects e.g. `$50M MC / $7.2K volume` (0.000144). Never FDV, never peak MC;
+   high volume is never a reject; zero / missing volume is a reject.
 8. **liquidity** — `liquidity_usd` ≥ `MEMECOIN_RISK_MIN_LIQUIDITY_USD` (the
    existing hard floor, $10K) **and** ≥ current MC ×
-   `MEMECOIN_RECENT_CROSSING_MIN_LIQUIDITY_TO_MCAP_RATIO` (0.001).
+   `MEMECOIN_RECENT_CROSSING_MIN_LIQUIDITY_TO_MCAP_RATIO` (**0.005** —
+   calibrated).
+
+The three ratio floors (6–8) were calibrated against a 9-token empirical
+reference set — see
+[recently-crossed-calibration.md](recently-crossed-calibration.md).
 
 Gates 4–8 live in `App\Services\Historical\RecentlyCrossedQualifier`
 (deterministic, PostgreSQL-only). A token with current MC **below `$5M`** still

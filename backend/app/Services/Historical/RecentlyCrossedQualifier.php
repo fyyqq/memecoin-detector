@@ -21,23 +21,33 @@ use Carbon\CarbonImmutable;
  * 30-day window, age ≤ 30d, and a verified/observed peak in `[$5M, $1B)`. This
  * class adds the market-QUALITY gates, evaluated in order:
  *
- *   1. discovery freshness — the discovery pipeline observed the token within
- *      `recent_crossing.discovery_freshness_hours`. We do not persist which feed
- *      (trending meta / boost / profile) surfaced a token, so a fresh
- *      `last_observed_at` is the honest token-level "still being discovered"
- *      signal. A token that fell off every discovery feed goes stale here.
- *   2. risk screen — reuses {@see MainListDecision} (LOWER/MEDIUM, screening
- *      completed, data completeness OK, no CRITICAL/HIGH hard override — i.e.
- *      no honeypot / cannot-buy / cannot-sell / mintable / …), WITHOUT the
- *      main-list ≥ 72h maturity gate.
- *   3. holder participation — a MEASURED `holder_count` risk signal is required
- *      when `require_holder_evidence`; holders per $1M of CURRENT market cap
- *      must be ≥ `min_holders_per_million_mcap`. Never a fabricated count.
+ *   1. discovery freshness — the discovery pipeline OBSERVED the token within
+ *      `recent_crossing.discovery_freshness_hours`. We persist only
+ *      `last_observed_at`, not which feed surfaced it, so this is honestly
+ *      "recently observed by discovery" — never a claim the token is "trending".
+ *   2. risk screen — reuses {@see MainListDecision} WITHOUT the main-list ≥ 72h
+ *      maturity gate. A POSITIVE hard-failure (honeypot / cannot-buy /
+ *      cannot-sell / mintable / CRITICAL / HIGH / recorded hard override)
+ *      rejects on every chain. A RISK-UNKNOWN / unscreened / low-completeness
+ *      result rejects only on a chain our security provider
+ *      (`risk.goplus_chain_map`) covers; on an unsupported chain (e.g.
+ *      `robinhood`) that outcome is expected and does not reject by itself
+ *      (`recent_crossing.allow_unsupported_chain_risk_unknown`).
+ *   3. holder participation — when a MEASURED `holder_count` risk signal
+ *      exists, holders per $1M of CURRENT market cap must be ≥
+ *      `min_holders_per_million_mcap` (calibrated to 25 — reference survivors
+ *      sit at 552–3,484). A MISSING count rejects only when
+ *      `require_holder_evidence` is true (default false — unsupported chains
+ *      cannot produce one). Never a fabricated count.
  *   4. 24h volume vs CURRENT market cap — `volume_h24 / current_market_cap` ≥
- *      `min_volume_to_mcap_ratio`. Never FDV, never peak MC. High volume is
- *      never a reject.
+ *      `min_volume_to_mcap_ratio` (calibrated to 0.01 — reference survivors
+ *      0.035–0.75). Never FDV, never peak MC. High volume is never a reject.
  *   5. liquidity — `liquidity_usd` ≥ `risk.liquidity.min_total_usd` (the
- *      existing hard floor) AND ≥ current MC × `min_liquidity_to_mcap_ratio`.
+ *      existing hard floor) AND ≥ current MC × `min_liquidity_to_mcap_ratio`
+ *      (calibrated to 0.005 — reference survivors 0.016–0.32).
+ *
+ * The ratio floors were calibrated against a 9-token empirical reference set —
+ * see docs/recently-crossed-calibration.md.
  *
  * This never changes qualification, `observed_peak_market_cap`, pump events,
  * evidence, or the risk assessment — it only decides list membership.
@@ -58,7 +68,7 @@ class RecentlyCrossedQualifier
 
         // 2. risk screen (no maturity gate) ------------------------------------
         $decision = MainListDecision::for($token, $now, requireMaturity: false);
-        if (! $decision->eligible) {
+        if (! $decision->eligible && ! $this->riskFailureIsOnlyAnUnsupportedChainDataGap($token, $decision)) {
             return RecentlyCrossedDecision::reject(RecentlyCrossedDecision::REASON_RISK_SCREEN_FAILED);
         }
 
@@ -97,6 +107,31 @@ class RecentlyCrossedQualifier
         }
 
         return RecentlyCrossedDecision::pass();
+    }
+
+    /**
+     * True when the risk screen only failed because the token's chain has no
+     * security-provider coverage (RISK UNKNOWN / not screened / incomplete /
+     * insufficient data) AND there is no POSITIVE hard-failure signal. On a
+     * covered chain (`risk.goplus_chain_map`) every risk failure still rejects.
+     */
+    private function riskFailureIsOnlyAnUnsupportedChainDataGap(Token $token, MainListDecision $decision): bool
+    {
+        if (! (bool) config('dexscreener.recent_crossing.allow_unsupported_chain_risk_unknown', true)) {
+            return false;
+        }
+
+        $dataGapReasons = ['not_screened', 'risk_unknown', 'screening_incomplete', 'insufficient_security_data'];
+
+        // Any non-data-gap reason (risk_high / risk_critical / hard_filter:* /
+        // too_young) means a real failure — never bypass.
+        if ($decision->reasons === [] || array_diff($decision->reasons, $dataGapReasons) !== []) {
+            return false;
+        }
+
+        $coveredChains = array_map('strval', array_keys((array) config('risk.goplus_chain_map', [])));
+
+        return ! in_array((string) $token->chain_id, $coveredChains, true);
     }
 
     /**

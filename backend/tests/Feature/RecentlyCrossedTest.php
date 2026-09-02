@@ -14,6 +14,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Test;
 use Tests\Concerns\CreatesRiskAssessments;
 use Tests\TestCase;
@@ -47,14 +48,21 @@ class RecentlyCrossedTest extends TestCase
 
         config()->set('dexscreener.recent_crossing.window_days', 30);
         config()->set('dexscreener.recent_crossing.discovery_freshness_hours', 48);
-        config()->set('dexscreener.recent_crossing.min_holders_per_million_mcap', 5.0);
-        config()->set('dexscreener.recent_crossing.require_holder_evidence', true);
-        config()->set('dexscreener.recent_crossing.min_volume_to_mcap_ratio', 0.001);
-        config()->set('dexscreener.recent_crossing.min_liquidity_to_mcap_ratio', 0.001);
+        // Calibrated thresholds (see docs/recently-crossed-calibration.md).
+        config()->set('dexscreener.recent_crossing.min_holders_per_million_mcap', 25.0);
+        config()->set('dexscreener.recent_crossing.require_holder_evidence', false);
+        config()->set('dexscreener.recent_crossing.min_volume_to_mcap_ratio', 0.01);
+        config()->set('dexscreener.recent_crossing.min_liquidity_to_mcap_ratio', 0.005);
+        config()->set('dexscreener.recent_crossing.allow_unsupported_chain_risk_unknown', true);
 
         config()->set('risk.liquidity.min_total_usd', 10_000.0);
         config()->set('risk.main_list.require_screening', true);
         config()->set('risk.min_data_completeness', 0.5);
+        // Chains our security provider covers — anything else (e.g. robinhood) is
+        // an "unsupported chain" for the RISK-UNKNOWN bypass.
+        config()->set('risk.goplus_chain_map', [
+            'ethereum' => '1', 'bsc' => '56', 'base' => '8453', 'solana' => 'solana',
+        ]);
     }
 
     protected function tearDown(): void
@@ -364,16 +372,96 @@ class RecentlyCrossedTest extends TestCase
     }
 
     #[Test]
-    public function missing_holder_evidence_is_rejected_when_the_policy_requires_it(): void
+    public function missing_holder_evidence_no_longer_rejects_by_default(): void
     {
+        // Calibrated default: `require_holder_evidence` is false — an UNKNOWN
+        // holder signal (or none at all) does not reject; the ratio floor only
+        // applies when a MEASURED count exists.
         $token = $this->token(['symbol' => 'NOHOLD'], [], ['holders' => null]); // UNKNOWN holder_count signal
+        $this->crossing($token, QualificationEvent::TYPE_CURRENT_OBSERVATION, $this->now->subHours(6));
+
+        $this->assertSame(['NOHOLD'], $this->symbols());
+
+        // ...but rejected when an operator opts back into requiring evidence.
+        config()->set('dexscreener.recent_crossing.require_holder_evidence', true);
+        $this->assertSame([], $this->symbols());
+    }
+
+    #[Test]
+    public function a_measured_holder_count_below_the_calibrated_floor_is_still_rejected(): void
+    {
+        // 25 holders per $1M is the calibrated floor. $20M MC + 400 holders =
+        // 20 per $1M -> reject.
+        $token = $this->token(['symbol' => 'THINHOLD'], ['market_cap' => 20_000_000.0], ['holders' => 400]);
         $this->crossing($token, QualificationEvent::TYPE_CURRENT_OBSERVATION, $this->now->subHours(6));
 
         $this->assertSame([], $this->symbols());
 
-        // ...but allowed when the policy is relaxed.
-        config()->set('dexscreener.recent_crossing.require_holder_evidence', false);
-        $this->assertSame(['NOHOLD'], $this->symbols());
+        // 600 holders = 30 per $1M -> clears the floor.
+        $ok = $this->token(['symbol' => 'OKHOLD'], ['market_cap' => 20_000_000.0], ['holders' => 600]);
+        $this->crossing($ok, QualificationEvent::TYPE_CURRENT_OBSERVATION, $this->now->subHours(6));
+
+        $this->assertContains('OKHOLD', $this->symbols());
+    }
+
+    // --- unsupported-chain risk data gap ------------------------------
+
+    #[Test]
+    public function a_token_on_an_unscreenable_chain_is_not_rejected_for_risk_unknown_alone(): void
+    {
+        // robinhood is absent from risk.goplus_chain_map -> RISK UNKNOWN is
+        // expected, not a red flag. No hard-failure signal, market quality OK.
+        $token = $this->token(
+            ['symbol' => 'RHOOD', 'chain_id' => 'robinhood'],
+            ['market_cap' => 20_000_000.0, 'volume_h24' => 900_000.0, 'liquidity_usd' => 400_000.0],
+            ['skipRisk' => true, 'skipHolders' => true],
+        );
+        $this->failRisk($token, RiskAssessment::LEVEL_UNKNOWN);
+        $this->crossing($token, QualificationEvent::TYPE_CURRENT_OBSERVATION, $this->now->subHours(6));
+
+        $this->assertSame(['RHOOD'], $this->symbols('?chain=robinhood'));
+    }
+
+    #[Test]
+    public function an_unscreened_token_on_an_unscreenable_chain_is_not_rejected(): void
+    {
+        $token = $this->token(
+            ['symbol' => 'RHNEW', 'chain_id' => 'robinhood'],
+            ['market_cap' => 20_000_000.0, 'volume_h24' => 900_000.0, 'liquidity_usd' => 400_000.0],
+            ['skipRisk' => true, 'skipHolders' => true],
+        );
+        $this->crossing($token, QualificationEvent::TYPE_CURRENT_OBSERVATION, $this->now->subHours(6));
+
+        $this->assertSame(['RHNEW'], $this->symbols('?chain=robinhood'));
+    }
+
+    #[Test]
+    public function an_unscreenable_chain_token_with_a_hard_failure_signal_is_still_rejected(): void
+    {
+        $token = $this->token(['symbol' => 'RHTRAP', 'chain_id' => 'robinhood'], [], ['skipRisk' => true, 'skipHolders' => true]);
+        $this->failRisk($token, RiskAssessment::LEVEL_CRITICAL); // honeypot hard override
+        $this->crossing($token, QualificationEvent::TYPE_CURRENT_OBSERVATION, $this->now->subHours(6));
+
+        $this->assertSame([], $this->symbols('?chain=robinhood'));
+    }
+
+    #[Test]
+    public function the_unsupported_chain_bypass_does_not_apply_to_a_covered_chain(): void
+    {
+        // solana IS covered -> RISK UNKNOWN still rejects (unchanged behaviour).
+        $token = $this->token(['symbol' => 'SOLDARK', 'chain_id' => 'solana'], [], ['skipRisk' => true, 'skipHolders' => true]);
+        $this->failRisk($token, RiskAssessment::LEVEL_UNKNOWN);
+        $this->crossing($token, QualificationEvent::TYPE_CURRENT_OBSERVATION, $this->now->subHours(6));
+
+        $this->assertSame([], $this->symbols());
+
+        // ...and the bypass can be turned off entirely.
+        config()->set('dexscreener.recent_crossing.allow_unsupported_chain_risk_unknown', false);
+        $rh = $this->token(['symbol' => 'RHOFF', 'chain_id' => 'robinhood'], [], ['skipRisk' => true, 'skipHolders' => true]);
+        $this->failRisk($rh, RiskAssessment::LEVEL_UNKNOWN);
+        $this->crossing($rh, QualificationEvent::TYPE_CURRENT_OBSERVATION, $this->now->subHours(6));
+
+        $this->assertSame([], $this->symbols('?chain=robinhood'));
     }
 
     // --- 24h volume vs current market cap -----------------------------
@@ -525,5 +613,72 @@ class RecentlyCrossedTest extends TestCase
         $this->crossing($bsc, QualificationEvent::TYPE_CURRENT_OBSERVATION, $this->now->subHours(6));
 
         $this->assertSame(['SOL'], $this->symbols('?chain=solana'));
+    }
+
+    // --- empirical reference-set compatibility -------------------------
+
+    /**
+     * Each of the 9 supplied real-world survivors, shaped to its observed
+     * market metrics and forced to age ≤ 30d, MUST clear the calibrated
+     * profile. #5 (WBNB — MC $1.2B, ~3y old, a wrapped gas token) is
+     * deliberately excluded: it violates the spec's own fixed age ≤ 30d and
+     * peak < $1B bands. Holder counts are unavailable for the 3 Robinhood
+     * tokens (no security-provider coverage) — those pass the holder gate
+     * vacuously and the risk gate via the unsupported-chain data-gap rule.
+     *
+     * @return array<string, array{0:string,1:string,2:float,3:float,4:float,5:?int,6:float}>
+     */
+    public static function referenceProfiles(): array
+    {
+        // name, chain, currentMc, liquidity, volume24, holders|null, observedPeak
+        return [
+            'apeonfone (fone) / solana' => ['fone', 'solana', 18_200_000, 748_000, 11_600_000, 27_726, 22_000_000],
+            'CASHCAT / robinhood' => ['CASHCAT', 'robinhood', 258_000_000, 4_490_000, 9_490_000, null, 300_000_000],
+            'The Juggernaut / robinhood' => ['JUGGERNAUT', 'robinhood', 6_950_000, 511_000, 1_980_000, null, 12_000_000],
+            'Artificial Inu (AI) / robinhood' => ['AI', 'robinhood', 217_000_000, 5_280_000, 31_200_000, null, 260_000_000],
+            'MarsCoin / bsc' => ['MARS', 'bsc', 66_700_000, 1_250_000, 4_210_000, 36_817, 90_000_000],
+            'Catecoin (CATE) / solana' => ['CATE', 'solana', 33_900_000, 1_760_000, 4_510_000, 117_971, 45_000_000],
+            '牛来 (NiuLai) / bsc' => ['NIULAI', 'bsc', 72_600_000, 1_200_000, 2_530_000, 52_625, 89_000_000],
+            'Bicat / bsc (COOLED)' => ['BICAT', 'bsc', 160_000, 50_600, 119_000, 4_166, 9_000_000],
+        ];
+    }
+
+    #[Test]
+    #[DataProvider('referenceProfiles')]
+    public function every_reference_survivor_clears_the_calibrated_profile(
+        string $symbol,
+        string $chain,
+        float $currentMc,
+        float $liquidity,
+        float $volume,
+        ?int $holders,
+        float $observedPeak,
+    ): void {
+        $covered = array_key_exists($chain, config('risk.goplus_chain_map'));
+
+        $token = $this->token(
+            [
+                'symbol' => $symbol,
+                'chain_id' => $chain,
+                'earliest_pair_created_at' => $this->now->subDays(15), // force ≤ 30d
+                'observed_peak_market_cap' => $observedPeak,
+            ],
+            [
+                'market_cap' => $currentMc,
+                'volume_h24' => $volume,
+                'liquidity_usd' => $liquidity,
+            ],
+            $covered
+                ? ['riskLevel' => RiskAssessment::LEVEL_LOWER, 'holders' => $holders]
+                : ['skipRisk' => true, 'skipHolders' => true],
+        );
+
+        $this->crossing($token, QualificationEvent::TYPE_CURRENT_OBSERVATION, $this->now->subDays(10), $observedPeak);
+
+        $this->assertContains(
+            $symbol,
+            $this->symbols(),
+            "reference survivor {$symbol} was rejected by the calibrated Recently Crossed profile",
+        );
     }
 }
