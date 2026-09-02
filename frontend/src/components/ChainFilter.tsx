@@ -35,7 +35,6 @@ interface ChainFilterProps {
 export function ChainFilter({ value, onChange, disabled }: ChainFilterProps) {
   return (
     <label className="chain-filter">
-      <span>Chain</span>
       <select
         value={value}
         disabled={disabled}

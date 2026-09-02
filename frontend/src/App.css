@@ -32,7 +32,7 @@
 
 .controls {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   gap: 0.75rem;
 }
 
@@ -48,11 +48,21 @@
 .controls button,
 .state button {
   font: inherit;
+  font-size: 1rem;
   padding: 0.4rem 0.7rem;
   border: 1px solid #d1d5db;
   border-radius: 6px;
   background: #f9fafb;
   cursor: pointer;
+}
+
+.chain-filter select {
+  color: CanvasText;
+  appearance: none;
+  padding-right: 2rem;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6' fill='none'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%236b7280' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.75rem center;
 }
 
 .controls button:disabled {
@@ -748,6 +758,10 @@
     background: #1f2937;
     border-color: #374151;
     color: inherit;
+  }
+
+  .chain-filter select {
+    color: CanvasText;
   }
 
   .row-link:hover td {
