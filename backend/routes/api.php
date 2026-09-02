@@ -4,7 +4,6 @@ use App\Http\Controllers\Api\MemecoinDetailController;
 use App\Http\Controllers\Api\MemecoinDiscoveryController;
 use App\Http\Controllers\Api\MemecoinDiscoveryStatusController;
 use App\Http\Controllers\Api\MemecoinListController;
-use App\Http\Controllers\Api\MonthlyChampionsController;
 use App\Http\Controllers\Api\RecentlyCrossedController;
 use Illuminate\Support\Facades\Route;
 
@@ -23,15 +22,10 @@ Route::get('/memecoins/discover', MemecoinDiscoveryController::class);
 // calls DexScreener.
 Route::get('/memecoins/discovery-status', MemecoinDiscoveryStatusController::class);
 
-// Read-only "Recently Crossed $5M" feed (Step 20) — PostgreSQL only, never calls
-// DexScreener / CoinGecko / GeckoTerminal. Defined before the {chainId}/{tokenAddress}
-// route so the literal segment always wins.
+// Read-only "🔥 Recently Crossed $5M" feed (Step 20) — PostgreSQL only, never
+// calls DexScreener / CoinGecko / GeckoTerminal / GoPlus. Defined before the
+// {chainId}/{tokenAddress} route so the literal segment always wins.
 Route::get('/memecoins/recently-crossed', RecentlyCrossedController::class);
-
-// Read-only "Monthly Top Memecoins" grid (Step 25 — Top 3) — reads
-// monthly_rankings only, never recomputes, never queries snapshots, never calls
-// a provider.
-Route::get('/memecoins/monthly-champions', MonthlyChampionsController::class);
 
 // Read-only token detail — PostgreSQL only, never calls DexScreener. Identity is
 // (chainId, tokenAddress); dashboard qualification is NOT applied here.

@@ -384,53 +384,9 @@ export interface MemecoinDetail {
   pump_intelligence: MemecoinPumpIntelligence
   /** Token-level origin + popularity narrative intelligence (Step 21). */
   token_narrative: TokenNarrative
-  /** Calendar months this token won as "Meme Champion" (Step 22). */
-  monthly_champion: MemecoinMonthlyChampion
   /** Deterministic risk screening (Step 24). */
   risk_assessment: RiskAssessment
   provenance: MemecoinProvenance
-}
-
-/**
- * `data.monthly_champion` (Step 25, Top 3) — the (month, chain-bucket, rank)
- * slots this token holds in "Monthly Top Memecoins". `championships: []` when it
- * has never been ranked.
- */
-export interface MemecoinMonthlyChampion {
-  is_champion: boolean
-  championships: Array<{
-    year: number
-    month: number
-    month_name: string
-    chain_bucket: 'solana' | 'robinhood' | 'bsc' | 'base' | 'other'
-    rank: number
-    status: 'finalized' | 'provisional'
-    performance_score: number | null
-    holder_count: number | null
-    monthly_volume: number | null
-    market_cap: number | null
-    market_cap_growth_pct: number | null
-    observation_coverage_ratio: number | null
-    source_type:
-      | 'internal_observed'
-      | 'exact_dexscreener_rank'
-      | 'best_supported_historical_performer'
-      | 'dexscreener'
-      | 'web_research'
-      | 'other_verified_source'
-      | null
-    source_reference: string | null
-    source_evidence: Array<{
-      name: string
-      url: string | null
-      claim: string
-      published_at: string | null
-      credibility?: string
-    }>
-    age_uncertain: boolean
-    confidence: 'high' | 'medium' | 'low' | null
-    finalized_at: string | null
-  }>
 }
 
 export interface MemecoinDetailMeta {

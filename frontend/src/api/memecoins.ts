@@ -1,4 +1,4 @@
-import type { MonthlyChampionsResponse, RecentlyCrossedResponse } from '../types/memecoin'
+import type { RecentlyCrossedResponse } from '../types/memecoin'
 
 const API_BASE_URL = (import.meta.env.VITE_API_URL ?? 'http://localhost:8010').replace(/\/$/, '')
 
@@ -25,24 +25,6 @@ export async function fetchRecentlyCrossed(
   }`
 
   return getJson<RecentlyCrossedResponse>(url, signal)
-}
-
-/**
- * Fetch the "Monthly Top Memecoins" grid for a year. Laravel-only — reads
- * `monthly_rankings` only, never recomputes, never calls a provider. Always 12
- * entries (January … December).
- */
-export async function fetchMonthlyChampions(
-  year?: number,
-  signal?: AbortSignal,
-): Promise<MonthlyChampionsResponse> {
-  const params = new URLSearchParams()
-  if (year) params.set('year', String(year))
-  const url = `${API_BASE_URL}/api/memecoins/monthly-champions${
-    params.toString() ? `?${params}` : ''
-  }`
-
-  return getJson<MonthlyChampionsResponse>(url, signal)
 }
 
 async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {

@@ -110,6 +110,32 @@
 > Ethereum / BSC / Base / Robinhood / Arbitrum / Polygon / Avalanche / Optimism /
 > PulseChain). Sections **7, 11 (K/L), 13-B/H**, §10 issues **#4**, the schema
 > tables and the route list below describe the pre-pass state.
+>
+> **Update 2026-09-02 (6th — monthly-removal pass):** the **"🏆 Monthly Top
+> Memecoins"** feature was removed entirely at the product owner's request. Gone:
+> the homepage section + the detail-page "Monthly Top Performer" block, the
+> `MonthlyChampions` component + its types/CSS, `GET /api/memecoins/monthly-champions`
+> + `MonthlyChampionsController`, the whole `App\Services\Ranking\*` tree
+> (`ChainBucket`, `MonthWindow`, `MonthlyChampionService`,
+> `MonthlyPerformanceCalculator`, `MonthlyChampionSelector`,
+> `MonthlyChampionResearchService`, `MonthlyHolderCollector`, the research
+> providers), the **Step 26 Phase 1** `App\Services\Historical\Research\*`
+> foundation, `MonthlyRanking` / `MonthlyRankingEvidence` + the `monthly_rankings`
+> / `monthly_ranking_evidence` tables (dropped by new migration
+> `2026_08_28_000030_drop_monthly_ranking_tables`; the four create/alter
+> migrations `…000017/000020/000027/000028` are kept for history),
+> `memecoins:finalize-monthly-champion` / `memecoins:research-monthly-champions`
+> + the daily `00:20` schedule, `config/ranking.php`, and the 5 monthly test
+> files (`MonthlyChampionTest`, `MonthlyChampionResearchTest`,
+> `MonthlyChampionSchedulerTest`, `MonthlyHolderPassTest`,
+> `HistoricalResearchFoundationTest`). The homepage is now **Header (chain
+> filter + Refresh) → 🔥 Recently Crossed $5M → footer** — one visible section.
+> **Untouched:** Recently Crossed (controller / `RecentlyCrossedQualifier` /
+> quality gates / config / tests / UI), risk screening, `GET /api/memecoins`,
+> discovery, the token detail page's non-monthly sections, and every other
+> scheduled command. Sections **7, 13-H**, §10 issue **#4**, the schema tables
+> and the route list below describe the pre-removal state; `docs/monthly-rankings.md`
+> and `docs/historical-research-foundation.md` were deleted.
 
 ---
 

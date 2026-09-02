@@ -444,9 +444,9 @@ class MemecoinDetailTest extends TestCase
         DB::disableQueryLog();
 
         // token + historical-evidence + qualification-events + narrative-report
-        // (+ its sources) + monthly-rankings + risk-assessment (+ its signals) +
-        // recent-snapshot window + pump events + explanation + evidence eager
-        // loads; small headroom for the framework, but never one-per-row.
+        // (+ its sources) + risk-assessment (+ its signals) + recent-snapshot
+        // window + pump events + explanation + evidence eager loads; small
+        // headroom for the framework, but never one-per-row.
         $this->assertLessThanOrEqual(13, count($queries));
     }
 }

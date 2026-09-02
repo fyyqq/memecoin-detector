@@ -223,14 +223,7 @@ function DetailView({ detail, retrievedAt }: DetailViewProps) {
         <QualificationTimeline detail={detail} />
       </Section>
 
-      {/* 4c. MONTHLY TOP PERFORMER */}
-      {detail.monthly_champion.is_champion && (
-        <Section title="Monthly Top Performer">
-          <MonthlyChampionBlock detail={detail} />
-        </Section>
-      )}
-
-      {/* 4d. RISK ASSESSMENT */}
+      {/* 4c. RISK ASSESSMENT */}
       <Section title="Risk Assessment">
         <RiskAssessmentBlock risk={detail.risk_assessment} />
       </Section>
@@ -575,116 +568,6 @@ function groupSignals(signals: RiskSignal[]): Array<[string, RiskSignal[]]> {
 
 function humanizeKey(key: string): string {
   return key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
-}
-
-const CHAIN_BUCKET_LABELS: Record<string, string> = {
-  solana: 'Solana',
-  robinhood: 'Robinhood',
-  bsc: 'BSC',
-  base: 'Base',
-  other: 'Other',
-}
-
-const MONTHLY_STATUS_LABELS: Record<string, string> = {
-  finalized: 'Finalized',
-  provisional: 'Provisional',
-  best_supported_candidate: 'Best-supported candidate',
-}
-
-const MONTHLY_SOURCE_LABELS: Record<string, string> = {
-  internal_observed: 'Internal observed data',
-  exact_dexscreener_rank: 'DexScreener historical rank (verified)',
-  best_supported_historical_performer: 'Historical market research',
-  dexscreener: 'DexScreener',
-  web_research: 'Historical web research',
-  other_verified_source: 'Other verified source',
-}
-
-function hostOfSafe(url: string | null): string {
-  if (!url) return ''
-  try {
-    return new URL(url).host
-  } catch {
-    return url
-  }
-}
-
-function MonthlyChampionBlock({ detail }: { detail: MemecoinDetail }) {
-  const MEDALS = ['🥇', '🥈', '🥉']
-  const championships = [...detail.monthly_champion.championships].sort(
-    (a, b) => b.year - a.year || b.month - a.month || a.rank - b.rank,
-  )
-
-  return (
-    <div className="timeline-card">
-      <p className="muted detail-note">
-        Top 3 participation record in its chain bucket for the month — ranked by holder count,
-        representative monthly volume and month-peak observed/verified market cap. Not a best
-        investment, best return, or safest coin.
-      </p>
-      <div className="champion-detail-list">
-        {championships.map((c) => (
-          <div key={`${c.year}-${c.month}-${c.chain_bucket}-${c.rank}`} className="champion-detail">
-            <p className="champion-detail-head">
-              <span aria-hidden="true">{MEDALS[c.rank - 1] ?? `#${c.rank}`}</span> {c.month_name}{' '}
-              {c.year} — {CHAIN_BUCKET_LABELS[c.chain_bucket] ?? c.chain_bucket} · Rank #{c.rank}
-              <span className={`champion-status champion-status-${c.status}`}>
-                {MONTHLY_STATUS_LABELS[c.status] ?? c.status}
-              </span>
-            </p>
-            <div className="detail-grid">
-              <Field label="Chain bucket">{CHAIN_BUCKET_LABELS[c.chain_bucket] ?? c.chain_bucket}</Field>
-              <Field label="Holder count">
-                {c.holder_count != null ? formatInteger(c.holder_count) : 'Unknown'}
-              </Field>
-              <Field label="Monthly volume">{show(c.monthly_volume, formatUsd)}</Field>
-              <Field label="Market cap (month peak)">{show(c.market_cap, formatUsd)}</Field>
-              <Field label="Performance score">
-                {c.performance_score != null ? `${c.performance_score} / 100` : '—'}
-              </Field>
-              <Field label="MC growth (context)">
-                {c.market_cap_growth_pct != null ? formatPercentCompact(c.market_cap_growth_pct) : '—'}
-              </Field>
-              <Field label="Historical source">
-                {c.source_type ? (MONTHLY_SOURCE_LABELS[c.source_type] ?? c.source_type) : '—'}
-              </Field>
-              <Field label="Confidence">
-                {c.confidence ? c.confidence.charAt(0).toUpperCase() + c.confidence.slice(1) : '—'}
-              </Field>
-              {c.age_uncertain && <Field label="Trading age">Uncertain (evidence incomplete)</Field>}
-            </div>
-
-            {c.source_evidence.length > 0 && (
-              <div className="champion-sources">
-                <h3>Sources</h3>
-                <ul>
-                  {c.source_evidence.map((s, i) => (
-                    <li key={i}>
-                      {s.url ? (
-                        <a href={s.url} target="_blank" rel="noreferrer noopener">
-                          {s.name || hostOfSafe(s.url)} <span aria-hidden="true">↗</span>
-                        </a>
-                      ) : (
-                        <strong>{s.name}</strong>
-                      )}
-                      {s.published_at ? ` · ${s.published_at}` : ''}
-                      {s.claim ? ` — ${s.claim}` : ''}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-
-            {c.source_type !== 'exact_dexscreener_rank' && c.source_type !== 'internal_observed' && (
-              <p className="muted">
-                Best-supported historical performer — not a claimed exact DexScreener rank.
-              </p>
-            )}
-          </div>
-        ))}
-      </div>
-    </div>
-  )
 }
 
 function crossingTypeLabel(type: string | null): string {

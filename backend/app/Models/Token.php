@@ -170,16 +170,6 @@ class Token extends Model
     }
 
     /**
-     * Calendar months this token won as "Meme Champion" (Step 22).
-     *
-     * @return HasMany<MonthlyRanking, $this>
-     */
-    public function monthlyRankings(): HasMany
-    {
-        return $this->hasMany(MonthlyRanking::class);
-    }
-
-    /**
      * The token's current deterministic risk assessment (Step 24) — one row per
      * token. Written ONLY by `memecoins:screen-risk`; never by a read API.
      *

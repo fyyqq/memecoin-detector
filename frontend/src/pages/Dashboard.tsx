@@ -1,15 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import {
-  API_BASE_URL,
-  fetchMonthlyChampions,
-  fetchRecentlyCrossed,
-  MemecoinApiError,
-} from '../api/memecoins'
+import { API_BASE_URL, fetchRecentlyCrossed, MemecoinApiError } from '../api/memecoins'
 import { ChainFilter } from '../components/ChainFilter'
-import { MonthlyChampions } from '../components/MonthlyChampions'
 import { RecentlyCrossedSection } from '../components/RecentlyCrossedSection'
 import { formatDateTime } from '../lib/format'
-import type { MonthlyChampionsResponse, RecentlyCrossedResponse } from '../types/memecoin'
+import type { RecentlyCrossedResponse } from '../types/memecoin'
 
 const AUTO_REFRESH_MS = 60_000
 
@@ -21,12 +15,7 @@ export function Dashboard() {
   const [crossedLoading, setCrossedLoading] = useState(true)
   const [crossedError, setCrossedError] = useState('')
 
-  const [champions, setChampions] = useState<MonthlyChampionsResponse | null>(null)
-  const [championsLoading, setChampionsLoading] = useState(true)
-  const [championsError, setChampionsError] = useState('')
-
   const crossedAbortRef = useRef<AbortController | null>(null)
-  const championsAbortRef = useRef<AbortController | null>(null)
 
   const message = (error: unknown, fallback: string) =>
     error instanceof MemecoinApiError ? error.message : fallback
@@ -51,31 +40,10 @@ export function Dashboard() {
     }
   }, [])
 
-  const loadChampions = useCallback(async () => {
-    championsAbortRef.current?.abort()
-    const controller = new AbortController()
-    championsAbortRef.current = controller
-    setChampionsLoading(true)
-    try {
-      setChampions(await fetchMonthlyChampions(undefined, controller.signal))
-      setChampionsError('')
-    } catch (error) {
-      if (error instanceof DOMException && error.name === 'AbortError') return
-      setChampionsError(message(error, 'Unable to load monthly top memecoins.'))
-    } finally {
-      if (championsAbortRef.current === controller) setChampionsLoading(false)
-    }
-  }, [])
-
   useEffect(() => {
     // oxlint-disable-next-line react/set-state-in-effect
     void loadCrossed(chain)
   }, [chain, loadCrossed])
-
-  useEffect(() => {
-    // oxlint-disable-next-line react/set-state-in-effect
-    void loadChampions()
-  }, [loadChampions])
 
   // Gentle auto-refresh — every minute.
   useEffect(() => {
@@ -88,18 +56,12 @@ export function Dashboard() {
   useEffect(
     () => () => {
       crossedAbortRef.current?.abort()
-      championsAbortRef.current?.abort()
     },
     [],
   )
 
   const recentDays = crossed?.meta.days ?? 30
   const retrievedAt = crossed?.meta.retrieved_at
-
-  const refreshAll = () => {
-    void loadCrossed(chain)
-    void loadChampions()
-  }
 
   return (
     <main className="app">
@@ -110,7 +72,7 @@ export function Dashboard() {
         </div>
         <div className="controls">
           <ChainFilter value={chain} onChange={setChain} disabled={fetching} />
-          <button type="button" onClick={refreshAll} disabled={fetching}>
+          <button type="button" onClick={() => void loadCrossed(chain)} disabled={fetching}>
             {fetching ? 'Refreshing…' : 'Refresh'}
           </button>
         </div>
@@ -124,14 +86,6 @@ export function Dashboard() {
         onRetry={() => void loadCrossed(chain)}
       />
 
-      <MonthlyChampions
-        months={champions?.data ?? []}
-        year={champions?.meta.year ?? new Date().getUTCFullYear()}
-        loading={championsLoading}
-        error={championsError}
-        onRetry={() => void loadChampions()}
-      />
-
       <footer className="provenance">
         <p>
           Data source: <strong>DexScreener</strong> (documented APIs only)
@@ -139,9 +93,8 @@ export function Dashboard() {
         </p>
         <p className="muted">
           Market-cap figures are provider-reported. The dashboard reads persisted data from this
-          app&rsquo;s API only (<code>{API_BASE_URL}/api/memecoins/recently-crossed</code>,{' '}
-          <code>/monthly-champions</code>). It never calls DexScreener or any provider directly, and
-          never opens a WebSocket.
+          app&rsquo;s API only (<code>{API_BASE_URL}/api/memecoins/recently-crossed</code>). It never
+          calls DexScreener or any provider directly, and never opens a WebSocket.
         </p>
       </footer>
     </main>
