@@ -35,7 +35,7 @@ use Throwable;
  * docs/trending-discovery-reconnaissance.md.
  *
  * A token qualifies for the main list when age <= 30 days AND a VERIFIED /
- * OBSERVED market-cap peak sits in [$5M, $200M] — proven by CURRENT_OBSERVATION
+ * OBSERVED market-cap peak sits in [$5M, $1B] — proven by CURRENT_OBSERVATION
  * (our own snapshot) or HISTORICAL_VERIFIED (CoinGecko). HISTORICAL_ESTIMATE
  * (FDV basis) and UNKNOWN do NOT qualify. A token whose CURRENT MC has dumped
  * below $5M STAYS qualified if an earlier observation / historical evidence
@@ -216,7 +216,7 @@ class DexScreenerDiscoveryService
             // Step 20 — "$5M crossing" events.
             'qualification_events_created' => 0,
             'qualification_events_existing' => 0,
-            // Step 19 — cleared the floor but peaked above the $200M ceiling.
+            // Step 19 — cleared the floor but peaked above the $1B ceiling.
             'not_qualified_peak_above_ceiling' => 0,
             // historical qualification (filled by HistoricalQualificationService)
             'historical_current_observation' => 0,
@@ -343,7 +343,7 @@ class DexScreenerDiscoveryService
             $diagnostics[$key] = $value;
         }
 
-        // 6. QUALIFICATION — $5M <= qualifying peak <= $200M ------------------
+        // 6. QUALIFICATION — $5M <= qualifying peak <= $1B ------------------
         /** @var list<QualifiedCandidate> $qualified */
         $qualified = [];
         /** @var list<array<string,mixed>> $notQualifiedSample */
@@ -419,7 +419,7 @@ class DexScreenerDiscoveryService
 
         // 6b. QUALIFICATION EVENTS (Step 20) — record a "$5M crossing" for every
         // token whose evidence proves a VERIFIED / OBSERVED crossing of the
-        // floor. Idempotent; the $200M ceiling is a list concern, not a crossing
+        // floor. Idempotent; the $1B ceiling is a list concern, not a crossing
         // concern (a token keeps its historical record either way).
         $eventStats = $this->qualificationEvents->recordBatch(
             array_map(

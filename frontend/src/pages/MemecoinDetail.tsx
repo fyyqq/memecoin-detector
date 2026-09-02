@@ -103,7 +103,7 @@ export function MemecoinDetailPage() {
   return (
     <main className="app">
       <p className="back-link">
-        <Link to="/">← Back to 30-Day Leaders</Link>
+        <Link to="/">← Back to dashboard</Link>
       </p>
 
       {status === 'loading' && <p className="state">Loading…</p>}
@@ -113,7 +113,7 @@ export function MemecoinDetailPage() {
           <p>Memecoin not found.</p>
           <p className="muted">
             No token with chain <code>{chainId}</code> and this contract address exists in our
-            database. <Link to="/">Back to 30-Day Leaders</Link>
+            database. <Link to="/">Back to dashboard</Link>
           </p>
         </div>
       )}

@@ -69,10 +69,10 @@ A token appears **at most once** per bucket.
 ## 2. Eligible universe (unchanged from Step 19)
 
 - age ≤ 30 days per in-month snapshot (`earliest_pair_created_at`, real pool age);
-- a **VERIFIED / OBSERVED** market-cap peak in `[$5M, $200M]`
+- a **VERIFIED / OBSERVED** market-cap peak in `[$5M, $1B]`
   (`CURRENT_OBSERVATION` or CoinGecko `HISTORICAL_VERIFIED`) — **`HISTORICAL_ESTIMATE`
   and `UNKNOWN` never qualify**, and `UNKNOWN` is never coerced to a number;
-- no in-month snapshot ever above $200M;
+- no in-month snapshot ever above $1B;
 - month-peak MC ≥ $5M · volume > 0 · liquidity > 0;
 - belongs to the bucket.
 
@@ -134,7 +134,7 @@ scheduled.** For a completed past month it gathers candidates from the ordered
 providers (`ranking.research.providers` = `internal_observed, seed_file`;
 `web_research` is an OFF-by-default stub), resolves identity (name + symbol +
 chain, ideally an address — never symbol alone; the declared bucket **and** the
-real chain must both map to the bucket), re-validates `$5M–$200M` **market cap**
+real chain must both map to the bucket), re-validates `$5M–$1B` **market cap**
 (never FDV) / bucket / month / ≤ 30-day trading age (`age_uncertain` + capped
 confidence when the launch date is unknown), re-scores with the **same
 participation formula**, ranks a **Top 3**, and classifies each row `finalized`

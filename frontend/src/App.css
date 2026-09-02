@@ -60,15 +60,6 @@
   opacity: 0.6;
 }
 
-.qualification {
-  margin: 1rem 0 1.5rem;
-  padding: 0.6rem 0.8rem;
-  background: #eef2ff;
-  border-radius: 6px;
-  font-size: 0.9rem;
-  color: #3730a3;
-}
-
 .state {
   margin: 2rem 0;
   padding: 1.5rem;
@@ -844,11 +835,6 @@
     background: #111827;
   }
 
-  .qualification {
-    background: #1e1b4b;
-    color: #c7d2fe;
-  }
-
   .table-wrap,
   .memecoin-table th,
   .memecoin-table td {
@@ -897,23 +883,6 @@
 
 .recently-crossed {
   margin-bottom: 1.5rem;
-}
-
-.qualified-list {
-  margin-top: 1rem;
-}
-
-.sort-control {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  font-size: 0.8rem;
-  color: #6b7280;
-}
-
-.sort-control select {
-  font: inherit;
-  padding: 0.15rem 0.35rem;
 }
 
 .crossing-status {
@@ -972,10 +941,6 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  .sort-control {
-    color: #9ca3af;
-  }
-
   .crossing-status-active {
     background: #14532d;
     color: #bbf7d0;
@@ -1770,152 +1735,5 @@
 
   .risk-hard-override {
     color: #fdba74;
-  }
-}
-
-.chain-activity-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 0.9rem;
-  margin-top: 0.6rem;
-}
-
-.chain-card {
-  border: 1px solid #e5e7eb;
-  border-radius: 10px;
-  padding: 0.9rem 1rem;
-  background: #fff;
-}
-
-.chain-card-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  margin-bottom: 0.5rem;
-}
-
-.chain-card-head h3 {
-  margin: 0;
-  font-size: 0.95rem;
-}
-
-.chain-delta {
-  font-size: 0.72rem;
-  font-weight: 700;
-}
-
-.chain-delta-up {
-  color: #15803d;
-}
-
-.chain-delta-down {
-  color: #b91c1c;
-}
-
-.chain-card-stats {
-  margin: 0;
-  display: grid;
-  gap: 0.4rem;
-}
-
-.chain-card-stats > div {
-  display: flex;
-  justify-content: space-between;
-  gap: 0.5rem;
-}
-
-.chain-card-stats dt {
-  font-size: 0.72rem;
-  color: #6b7280;
-}
-
-.chain-card-stats dd {
-  margin: 0;
-  font-size: 0.8rem;
-  font-weight: 600;
-  text-align: right;
-}
-
-.top-volume-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 0.9rem;
-  margin-top: 0.6rem;
-}
-
-.top-volume-card {
-  border: 1px solid #e5e7eb;
-  border-radius: 10px;
-  padding: 0.8rem 1rem;
-  background: #fff;
-}
-
-.top-volume-card h3 {
-  margin: 0 0 0.5rem;
-  font-size: 0.9rem;
-}
-
-.top-volume-list {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  display: grid;
-  gap: 0.35rem;
-}
-
-.top-volume-list > li {
-  display: grid;
-  grid-template-columns: 1.2rem 1fr auto;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.25rem 0.3rem;
-  border-radius: 6px;
-  cursor: pointer;
-}
-
-.top-volume-list > li:hover,
-.top-volume-list > li:focus-visible {
-  background: #f3f4f6;
-}
-
-.top-volume-rank {
-  font-weight: 700;
-  color: #9ca3af;
-  font-size: 0.8rem;
-}
-
-.top-volume-token {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.top-volume-token .muted {
-  font-size: 0.68rem;
-}
-
-.top-volume-vol {
-  font-size: 0.82rem;
-}
-
-.top-volume-list .risk-chip {
-  grid-column: 1 / -1;
-  justify-self: start;
-}
-
-@media (prefers-color-scheme: dark) {
-  .chain-card,
-  .top-volume-card {
-    background: #0f172a;
-    border-color: #1f2937;
-  }
-
-  .chain-card-stats dt {
-    color: #9ca3af;
-  }
-
-  .top-volume-list > li:hover,
-  .top-volume-list > li:focus-visible {
-    background: #1e293b;
   }
 }

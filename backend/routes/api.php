@@ -1,13 +1,11 @@
 <?php
 
-use App\Http\Controllers\Api\ChainActivityController;
 use App\Http\Controllers\Api\MemecoinDetailController;
 use App\Http\Controllers\Api\MemecoinDiscoveryController;
 use App\Http\Controllers\Api\MemecoinDiscoveryStatusController;
 use App\Http\Controllers\Api\MemecoinListController;
 use App\Http\Controllers\Api\MonthlyChampionsController;
 use App\Http\Controllers\Api\RecentlyCrossedController;
-use App\Http\Controllers\Api\TopVolumeController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/health', function () {
@@ -34,11 +32,6 @@ Route::get('/memecoins/recently-crossed', RecentlyCrossedController::class);
 // monthly_rankings only, never recomputes, never queries snapshots, never calls
 // a provider.
 Route::get('/memecoins/monthly-champions', MonthlyChampionsController::class);
-
-// Chain-level market views (PostgreSQL only — never DexScreener, never a
-// security provider). All defined before the {chainId}/{tokenAddress} wildcard.
-Route::get('/memecoins/top-volume', TopVolumeController::class);
-Route::get('/memecoins/chain-activity', ChainActivityController::class);
 
 // Read-only token detail — PostgreSQL only, never calls DexScreener. Identity is
 // (chainId, tokenAddress); dashboard qualification is NOT applied here.

@@ -86,6 +86,30 @@
 > operator-seed-only (no verified provider network); **`web_research` stays
 > OFF**. Full detail:
 > [historical-research-foundation.md](historical-research-foundation.md).
+>
+> **Update 2026-09-01 (5th — dashboard-simplification pass):** the homepage is
+> now **Header (chain filter) → 🔥 Recently Crossed $5M → 🏆 Monthly Top
+> Memecoins** (three visible sections). Removed: the **"🟢 Main Memecoin List"**,
+> **"📊 Chain Market Activity"** and **"💧 Top Volume by Chain"** sections and
+> their backends — `GET /api/memecoins/top-volume` + `TopVolumeController`,
+> `GET /api/memecoins/chain-activity` + `ChainActivityController`, the
+> `daily_chain_activity` table + `DailyChainActivity` model, `ChainActivityRollup`
+> (was inside `memecoins:discover`), `App\Services\Trending\MarketIntegrityGate`,
+> `config/trending.php`, and the frontend `MemecoinTable` / `TopVolume` /
+> `ChainActivity` / `QualificationBadge` components + their types/CSS.
+> **Kept:** `GET /api/memecoins` + `MemecoinListController` + `MemecoinResource` +
+> `Token::scopeMarketCapQualified` (the tested market-cap + risk qualification
+> contract, and still the gate the risk screen consumes — the UI just stopped
+> calling it), `memecoins:discover` (minus the rollup), risk screening, token
+> detail pages (incl. risk data), Recently Crossed, Monthly Top Memecoins (incl.
+> its `Other` display bucket). The **market-cap qualification ceiling moved
+> $200M → $1B** (inclusive; the $5M floor is unchanged) via
+> `dexscreener.filters.observed_peak_market_cap_max_usd` /
+> `MEMECOIN_OBSERVED_PEAK_MAX_USD`. The **header chain filter** dropped the
+> generic `Other` option and now lists real DexScreener chain ids (Solana /
+> Ethereum / BSC / Base / Robinhood / Arbitrum / Polygon / Avalanche / Optimism /
+> PulseChain). Sections **7, 11 (K/L), 13-B/H**, §10 issues **#4**, the schema
+> tables and the route list below describe the pre-pass state.
 
 ---
 

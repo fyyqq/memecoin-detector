@@ -1,6 +1,15 @@
 /**
- * Chain selector. Offers a few common chains plus "All" / "Other" — but the
- * backend accepts any valid chain id, this list is only a UI convenience.
+ * Header chain selector — REAL blockchain identities.
+ *
+ * The values are the DexScreener `chain_id`s the application recognises: the
+ * chains mapped in `backend/config/historical.php` `chain_map` (ethereum, solana,
+ * bsc, base, arbitrum, polygon, avalanche, optimism, pulsechain) plus
+ * `robinhood`. The backend accepts any valid chain id — this list is the UI
+ * convenience for the common ones.
+ *
+ * NOTE: this is NOT the Monthly "Other" display bucket. "Other" is a
+ * `monthly_rankings.chain_bucket` grouping used only by "Monthly Top Memecoins";
+ * it is deliberately absent here.
  */
 
 const CHAIN_OPTIONS: Array<{ value: string; label: string }> = [
@@ -10,7 +19,11 @@ const CHAIN_OPTIONS: Array<{ value: string; label: string }> = [
   { value: 'bsc', label: 'BSC' },
   { value: 'base', label: 'Base' },
   { value: 'robinhood', label: 'Robinhood' },
-  { value: 'other', label: 'Other' },
+  { value: 'arbitrum', label: 'Arbitrum' },
+  { value: 'polygon', label: 'Polygon' },
+  { value: 'avalanche', label: 'Avalanche' },
+  { value: 'optimism', label: 'Optimism' },
+  { value: 'pulsechain', label: 'PulseChain' },
 ]
 
 interface ChainFilterProps {

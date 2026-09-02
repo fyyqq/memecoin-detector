@@ -35,7 +35,9 @@ class RecentlyCrossedTest extends TestCase
         Http::preventStrayRequests();
 
         config()->set('dexscreener.filters.observed_peak_market_cap_min_usd', 5_000_000);
-        config()->set('dexscreener.filters.observed_peak_market_cap_max_usd', 200_000_000);
+        // Dashboard-simplification pass: the qualification ceiling moved from
+        // $200M to $1B (inclusive). Mirror the production default here.
+        config()->set('dexscreener.filters.observed_peak_market_cap_max_usd', 1_000_000_000);
         config()->set('dexscreener.filters.max_age_days', 30);
         config()->set('dexscreener.recent_crossing.hours', 48);
         config()->set('dexscreener.recent_crossing.max_hours', 168);
@@ -259,5 +261,42 @@ class RecentlyCrossedTest extends TestCase
         $res = $this->getJson('/api/memecoins/recently-crossed')->assertOk();
 
         $this->assertSame(['B', 'C', 'A'], collect($res->json('data'))->pluck('symbol')->all());
+    }
+
+    /**
+     * The qualification ceiling was raised from $200M to $1B (inclusive) in the
+     * dashboard-simplification pass. The $5M floor is unchanged.
+     */
+    #[Test]
+    public function the_market_cap_qualification_band_is_five_million_to_one_billion(): void
+    {
+        $cases = [
+            ['SUB5M', 4_990_000.0, false],
+            ['AT5M', 5_000_000.0, true],
+            ['AT200M', 200_000_000.0, true],
+            ['AT500M', 500_000_000.0, true],
+            ['AT999M', 999_000_000.0, true],
+            ['AT1B', 1_000_000_000.0, true],   // inclusive ceiling
+            ['OVER1B', 1_250_000_000.0, false],
+        ];
+
+        foreach ($cases as [$symbol, $peak, $_]) {
+            $token = $this->token([
+                'symbol' => $symbol,
+                'observed_peak_market_cap' => $peak,
+                'observed_peak_market_cap_at' => $this->now->subDays(1),
+            ], ['market_cap' => min($peak, 6_500_000.0)]);
+            $this->crossing($token, QualificationEvent::TYPE_CURRENT_OBSERVATION, $this->now->subHours(6), $peak);
+        }
+
+        $returned = collect($this->getJson('/api/memecoins/recently-crossed')->assertOk()->json('data'))
+            ->pluck('symbol')
+            ->all();
+
+        foreach ($cases as [$symbol, $_, $shouldQualify]) {
+            $shouldQualify
+                ? $this->assertContains($symbol, $returned, "$symbol should qualify")
+                : $this->assertNotContains($symbol, $returned, "$symbol should NOT qualify");
+        }
     }
 }

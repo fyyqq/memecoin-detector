@@ -77,7 +77,7 @@ class Token extends Model
     /**
      * The Step 19 market-cap qualification predicate, shared by the read APIs
      * and the risk screener: age <= max_age_days AND a VERIFIED / OBSERVED peak
-     * in [$5M, $200M]. HISTORICAL_ESTIMATE (FDV basis) and UNKNOWN never
+     * in [$5M, $1B]. HISTORICAL_ESTIMATE (FDV basis) and UNKNOWN never
      * qualify. Risk screening layers ON TOP of this — it never changes it.
      *
      * @param  Builder<Token>  $query

@@ -75,16 +75,16 @@ class MonthlyPerformanceCalculator
         );
 
         // 1. Token belongs to the eligible universe (Step 19): a VERIFIED /
-        //    OBSERVED market-cap peak in [$5M, $200M]. HISTORICAL_ESTIMATE and
+        //    OBSERVED market-cap peak in [$5M, $1B]. HISTORICAL_ESTIMATE and
         //    UNKNOWN never qualify.
         if ($token->earliest_pair_created_at === null) {
             return $ineligible('no_pool_creation_timestamp');
         }
         if (! $this->tokenInEligibleUniverse($token, $min, $max)) {
-            return $ineligible('token_not_in_5m_200m_universe');
+            return $ineligible('token_not_in_market_cap_universe');
         }
 
-        // 2. A token that reached > $200M AT ANY POINT in the month is out.
+        // 2. A token that exceeded the $1B ceiling AT ANY POINT in the month is out.
         $anyAboveCeiling = $monthSnapshots->contains(
             fn (MarketSnapshot $s): bool => $s->market_cap !== null && $s->market_cap > $max,
         );

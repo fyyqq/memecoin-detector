@@ -123,7 +123,7 @@ class HistoricalPeakEvidence extends Model
     /**
      * A verified/observed market cap that cleared the floor but whose peak
      * exceeds the ceiling — i.e. it qualified once but is now outside the
-     * requested $5M–$200M universe.
+     * requested $5M–$1B universe.
      */
     public function peakAboveCeiling(float $min, float $max): bool
     {

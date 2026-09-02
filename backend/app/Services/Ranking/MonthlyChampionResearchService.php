@@ -27,7 +27,7 @@ use Throwable;
  *      research; `web_research` = an OFF-by-default extension point);
  *   2. resolve entity identity (name + symbol + chain, ideally an address —
  *      never symbol alone);
- *   3. validate eligibility as far as the evidence allows: $5M–$200M MARKET CAP
+ *   3. validate eligibility as far as the evidence allows: $5M–$1B MARKET CAP
  *      (never FDV), the right bucket, the right month, ≤ 30-day trading age
  *      (`age_uncertain` + lower confidence when the launch date is unknown);
  *   4. rank survivors (Top 3) with the deterministic participation formula
@@ -48,10 +48,6 @@ use Throwable;
  */
 class MonthlyChampionResearchService
 {
-    private const MIN_MC_USD = 5_000_000.0;
-
-    private const MAX_MC_USD = 200_000_000.0;
-
     /** @var list<MonthlyChampionResearchProvider> */
     private array $providers;
 
@@ -161,6 +157,21 @@ class MonthlyChampionResearchService
     }
 
     /**
+     * The shared Step 19 market-cap band ($5M–$1B by default) — the SAME
+     * boundary the read APIs, discovery pre-filter and monthly finalize use.
+     * Read from config so it never drifts.
+     */
+    private function minMc(): float
+    {
+        return (float) config('dexscreener.filters.observed_peak_market_cap_min_usd', 5_000_000);
+    }
+
+    private function maxMc(): float
+    {
+        return (float) config('dexscreener.filters.observed_peak_market_cap_max_usd', 1_000_000_000);
+    }
+
+    /**
      * @return list<MonthlyResearchCandidate>
      */
     private function gather(MonthWindow $window, string $bucket, int &$providerFailures): array
@@ -230,7 +241,7 @@ class MonthlyChampionResearchService
             // Market cap band — MARKET CAP, never FDV. A KNOWN peak outside the
             // band is a hard reject. A missing peak is allowed only for a
             // low-confidence best-supported candidate (handled at classify).
-            if ($candidate->peakMarketCap !== null && ! $candidate->peakInBand(self::MIN_MC_USD, self::MAX_MC_USD)) {
+            if ($candidate->peakMarketCap !== null && ! $candidate->peakInBand($this->minMc(), $this->maxMc())) {
                 $candidate->rejectReason = 'peak_market_cap_out_of_band';
 
                 continue;
@@ -445,7 +456,7 @@ class MonthlyChampionResearchService
             return [MonthlyRanking::STATUS_FINALIZED, MonthlyRanking::CONFIDENCE_LOW];
         }
 
-        $peakInBand = $c->peakInBand(self::MIN_MC_USD, self::MAX_MC_USD);
+        $peakInBand = $c->peakInBand($this->minMc(), $this->maxMc());
         $strong = count(array_filter($c->sources, fn (MonthlyResearchSource $s): bool => $s->isStrong()));
         $primary = count(array_filter($c->sources, fn (MonthlyResearchSource $s): bool => $s->isPrimary()));
         $fullPerformance = $c->canComputeGrowth() && $c->performanceScore !== null;

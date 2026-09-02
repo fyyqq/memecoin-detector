@@ -110,7 +110,7 @@ return [
     | Sprint 1 eligibility (Step 19 — bounded market-cap universe):
     |
     |   age <= max_age_days
-    |   AND $5M <= qualifying_peak <= $200M
+    |   AND $5M <= qualifying_peak <= $1B
     |
     | where qualifying_peak is the highest VERIFIED / OBSERVED market cap we trust
     | (CURRENT_OBSERVATION or HISTORICAL_VERIFIED). A token that ONCE printed a
@@ -119,11 +119,12 @@ return [
     | already cleared the floor via an earlier observation / historical evidence
     | — the lower bound is a peak rule, not a current-MC rule.
     |
-    | HISTORICAL_ESTIMATE (FDV basis) never qualifies.
+    | The ceiling is inclusive (peak <= ceiling), matching every boundary in the
+    | codebase. HISTORICAL_ESTIMATE (FDV basis) never qualifies.
     */
     'filters' => [
         'observed_peak_market_cap_min_usd' => (int) env('MEMECOIN_OBSERVED_PEAK_MIN_USD', 5_000_000),
-        'observed_peak_market_cap_max_usd' => (int) env('MEMECOIN_OBSERVED_PEAK_MAX_USD', 200_000_000),
+        'observed_peak_market_cap_max_usd' => (int) env('MEMECOIN_OBSERVED_PEAK_MAX_USD', 1_000_000_000),
         'max_age_days' => (int) env('MEMECOIN_MAX_AGE_DAYS', 30),
         // Loose pre-enrichment age gate for trending-meta pairs — PERFORMANCE
         // ONLY. Final age validation always uses earliest_pair_created_at across

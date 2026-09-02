@@ -5,7 +5,7 @@ market-cap qualification. It gates the MAIN LIST:
 
 ```
 MARKET-CAP QUALIFICATION  (Step 19 — unchanged)
-        │  age ≤ 30d · verified/observed peak in [$5M, $200M] · volume>0 · liquidity>0
+        │  age ≤ 30d · verified/observed peak in [$5M, $1B] · volume>0 · liquidity>0
         ▼
 RISK SCREENING  (this step — memecoins:screen-risk)
         ▼
@@ -293,10 +293,9 @@ un-renounced after a scan.
 
 ### Risk scan staleness
 
-Risk is point-in-time. `GET /api/memecoins/top-volume` returns `risk_checked_at`
-+ `risk_check_stale` (true when the last scan is older than
-`MEMECOIN_RISK_SCAN_COOLDOWN_HOURS` = 6h, or never run); the UI shows **"RISK
-CHECK STALE"** and never silently treats a stale (or absent) scan as safe.
+Risk is point-in-time (`screened_at`). A scan older than
+`MEMECOIN_RISK_SCAN_COOLDOWN_HOURS` = 6h (or never run) is stale; the detail-page
+risk assessment never silently treats a stale (or absent) scan as safe.
 
 ## 15. Limitations
 
@@ -380,12 +379,15 @@ container (no new container).
 
 ## Frontend
 
-Homepage: **🔥 Recently Crossed $5M** → **🟢 Main Memecoin List**
-(Token / Chain / Age / Current MC / Peak MC / **Risk** / Volume / Liquidity;
-compact `LOWER` / `MEDIUM` chip). A qualified token that fails the screen is not
-shown here — see its detail page. Detail page
-gains a **"Risk Assessment"** section (level, score, data completeness, last
-screened, then signal groups with ✅ / ⚠ / ❓ per signal, each expandable for
-source + checked time). Copy-CA and row-click behaviour unchanged; the risk
-components never render "SAFE". The browser still calls only this app's Laravel
-API (the DexScreener chart iframe is the only third-party content).
+Risk data is surfaced on the **token detail page** only — a **"Risk Assessment"**
+section (level, score, data completeness, last screened, then signal groups with
+✅ / ⚠ / ❓ per signal, each expandable for source + checked time; `pending`
+placeholder when unscreened). The risk components never render "SAFE". The
+browser calls only this app's Laravel API (the DexScreener chart iframe is the
+only third-party content).
+
+*(The screen still runs (`memecoins:screen-risk`) and still gates
+`GET /api/memecoins` via `Token::scopeMarketCapQualified` + `MainListDecision`.
+The "🟢 Main Memecoin List" homepage section that consumed that endpoint was
+removed in the dashboard-simplification pass — the endpoint and the screen are
+unchanged.)*

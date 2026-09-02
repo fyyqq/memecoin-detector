@@ -1,11 +1,4 @@
-import type {
-  ChainActivityResponse,
-  MemecoinListResponse,
-  MemecoinQuery,
-  MonthlyChampionsResponse,
-  RecentlyCrossedResponse,
-  TopVolumeResponse,
-} from '../types/memecoin'
+import type { MonthlyChampionsResponse, RecentlyCrossedResponse } from '../types/memecoin'
 
 const API_BASE_URL = (import.meta.env.VITE_API_URL ?? 'http://localhost:8010').replace(/\/$/, '')
 
@@ -17,35 +10,17 @@ export class MemecoinApiError extends Error {
 }
 
 /**
- * Fetch the qualified "30-Day Leaders" list from the Laravel read API.
- *
- * This only ever talks to Laravel (`GET /api/memecoins`) — never DexScreener,
- * and never the discovery endpoint.
- */
-export async function fetchMemecoins(
-  query: MemecoinQuery = {},
-  signal?: AbortSignal,
-): Promise<MemecoinListResponse> {
-  const params = new URLSearchParams()
-  if (query.chain) params.set('chain', query.chain)
-  if (query.limit) params.set('limit', String(query.limit))
-  if (query.sort) params.set('sort', query.sort)
-
-  const url = `${API_BASE_URL}/api/memecoins${params.toString() ? `?${params}` : ''}`
-
-  return getJson<MemecoinListResponse>(url, signal)
-}
-
-/**
  * Fetch the "Recently Crossed $5M" feed. Laravel-only, PostgreSQL-only — never
- * DexScreener. `hours` widens/narrows the window (server max 168).
+ * DexScreener. `hours` widens/narrows the window (server max 168); `chain`
+ * filters to one real DexScreener chain id.
  */
 export async function fetchRecentlyCrossed(
-  hours?: number,
+  { chain, hours }: { chain?: string; hours?: number } = {},
   signal?: AbortSignal,
 ): Promise<RecentlyCrossedResponse> {
   const params = new URLSearchParams()
   if (hours) params.set('hours', String(hours))
+  if (chain) params.set('chain', chain)
   const url = `${API_BASE_URL}/api/memecoins/recently-crossed${
     params.toString() ? `?${params}` : ''
   }`
@@ -54,7 +29,7 @@ export async function fetchRecentlyCrossed(
 }
 
 /**
- * Fetch the "Monthly Meme Champions" grid for a year. Laravel-only — reads
+ * Fetch the "Monthly Top Memecoins" grid for a year. Laravel-only — reads
  * `monthly_rankings` only, never recomputes, never calls a provider. Always 12
  * entries (January … December).
  */
@@ -69,28 +44,6 @@ export async function fetchMonthlyChampions(
   }`
 
   return getJson<MonthlyChampionsResponse>(url, signal)
-}
-
-/**
- * Fetch "Top 5 Volume by Chain" — REPORTED volume, integrity-gated. Not claimed
- * organic. Laravel-only, PostgreSQL-only.
- */
-export async function fetchTopVolume(
-  chain?: string,
-  signal?: AbortSignal,
-): Promise<TopVolumeResponse> {
-  const params = new URLSearchParams()
-  if (chain) params.set('chain', chain)
-  const url = `${API_BASE_URL}/api/memecoins/top-volume${params.toString() ? `?${params}` : ''}`
-  return getJson<TopVolumeResponse>(url, signal)
-}
-
-/**
- * Fetch "Chain Market Activity" — reads `daily_chain_activity` only. Reported
- * volume, deduplicated token-level representative-pair volume per bucket.
- */
-export async function fetchChainActivity(signal?: AbortSignal): Promise<ChainActivityResponse> {
-  return getJson<ChainActivityResponse>(`${API_BASE_URL}/api/memecoins/chain-activity`, signal)
 }
 
 async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {

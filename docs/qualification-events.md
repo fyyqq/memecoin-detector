@@ -6,7 +6,7 @@ ranking:
 > **Which tracked memecoins have most recently crossed the $5M market-cap
 > threshold?**
 
-Nothing about the qualification universe changes — `$5M` floor, `$200M` ceiling,
+Nothing about the qualification universe changes — `$5M` floor, `$1B` ceiling,
 age ≤ 30 days, `volume > 0`, `liquidity > 0`, and the "`HISTORICAL_ESTIMATE`
 never qualifies" rule are all untouched. Step 20 only **records when the crossing
 happened** and surfaces it.
@@ -103,15 +103,15 @@ historical-qualification step:
 
 ```
 … → AGE FILTER → PERSIST TOKEN + SNAPSHOT
-   → CURRENT OBSERVATION CHECK → HISTORICAL LOOKUP → QUALIFICATION ($5M–$200M)
+   → CURRENT OBSERVATION CHECK → HISTORICAL LOOKUP → QUALIFICATION ($5M–$1B)
    → RECORD QUALIFICATION EVENTS   ← Step 20
    → PERSIST EVIDENCE
 ```
 
 `App\Services\Historical\QualificationEventRecorder::recordBatch()`:
 
-1. keeps only entries whose evidence `qualifies($5M, $200M)` — same "qualified"
-   definition the main list uses (a verified/observed peak **above `$200M`** gets
+1. keeps only entries whose evidence `qualifies($5M, $1B)` — same "qualified"
+   definition the main list uses (a verified/observed peak **above `$1B`** gets
    no event; age is already enforced upstream);
 2. one query loads every existing event for the batch (`token_id → type`);
 3. for each token missing its matching-type row, creates it (one indexed
@@ -197,7 +197,7 @@ never writes, never creates an event.
 
 - default window 48h; `?hours=` (1 … 168); optional `?chain=`.
 - returns currently-**qualified** tokens (age ≤ 30d, verified/observed peak in
-  `[$5M, $200M]`) whose **representative** crossing is inside the window.
+  `[$5M, $1B]`) whose **representative** crossing is inside the window.
 - a token with current MC **below `$5M`** still appears — it previously crossed.
 - newest crossing first.
 
