@@ -62,6 +62,30 @@
 > score 50); every other completed past bucket is honestly `no_verified_result`.
 > Sections **7, 13-H**, the schema tables and issue **#4** below describe the
 > pre-Step-25 one-winner model.
+>
+> **Update 2026-09-01 (4th — Step 26 Phase 1, historical research foundation):**
+> the **typed** base for evidence-based historical reconstruction of past
+> Monthly Top Memecoins buckets. New `App\Services\Historical\Research\`:
+> `HistoricalMetric` enum (holders / volume / market_cap / ohlcv / identity /
+> pool_date), `MetricBasis` (`observed` / `reconstructed` / `estimate` — no
+> "verified"; an estimate is always labelled one and hard-capped at `low`
+> confidence), `SourceCredibility` (string tiers shared with
+> `MonthlyResearchSource`), `HistoricalConfidence` + a deterministic
+> `HistoricalConfidenceCalculator` (band derived from source credibility +
+> timestamp + identity + basis + corroboration — never hand-typed),
+> `HistoricalMetricResult` (an *unavailable* metric is a first-class value — no
+> fabricated number ever reaches scoring), and the mandatory-capability
+> `HistoricalResearchProvider` interface (`supportsMetric()`). New **child**
+> table `monthly_ranking_evidence` (`migration …000028`; per-metric per-source
+> provenance; unique on `(monthly_ranking_id, dedupe_hash)`;
+> `MonthlyRanking hasMany evidence`; read-only from the API). Phase 1 changes
+> **no** ranking behaviour, the 40/35/25 weights, Top-3 selection, historical
+> qualification, or risk. No provider / command / scheduler / frontend yet.
+> **Holder history remains an unsolved automated-source gap** (no free API time
+> series — UNKNOWN for past months unless operator-seeded); **Robinhood** is
+> operator-seed-only (no verified provider network); **`web_research` stays
+> OFF**. Full detail:
+> [historical-research-foundation.md](historical-research-foundation.md).
 
 ---
 

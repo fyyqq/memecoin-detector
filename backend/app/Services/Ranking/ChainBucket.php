@@ -5,10 +5,11 @@ declare(strict_types=1);
 namespace App\Services\Ranking;
 
 /**
- * The FIVE fixed display buckets for "Monthly Top Memecoins" (Step 22, corrected).
+ * The FIVE fixed display buckets for "Monthly Top Memecoins" (Step 25 — Top 3).
  *
- * Every `(year, month, chain_bucket)` has AT MOST ONE champion — 12 months × 5
- * buckets = at most 60 rows a year.
+ * Every `(year, month, chain_bucket)` holds a ranked Top 3 — `rank ∈ {1,2,3}`,
+ * unique on `(year, month, chain_bucket, rank)`, at most 12 × 5 × 3 = 180 rows a
+ * year.
  *
  *   solana     — chain_id = solana
  *   robinhood  — chain_id = robinhood
@@ -16,6 +17,8 @@ namespace App\Services\Ranking;
  *   base       — chain_id = base
  *   other      — every other chain_id (never hard-coded; the token keeps its
  *                real chain_id, only `monthly_rankings.chain_bucket` says "other")
+ *
+ * The bucket list is fixed here and is intentionally not env-configurable.
  */
 final class ChainBucket
 {

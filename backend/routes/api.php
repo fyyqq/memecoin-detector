@@ -30,8 +30,9 @@ Route::get('/memecoins/discovery-status', MemecoinDiscoveryStatusController::cla
 // route so the literal segment always wins.
 Route::get('/memecoins/recently-crossed', RecentlyCrossedController::class);
 
-// Read-only "Monthly Meme Champions" grid (Step 22) — reads monthly_rankings
-// only, never recomputes, never queries snapshots, never calls a provider.
+// Read-only "Monthly Top Memecoins" grid (Step 25 — Top 3) — reads
+// monthly_rankings only, never recomputes, never queries snapshots, never calls
+// a provider.
 Route::get('/memecoins/monthly-champions', MonthlyChampionsController::class);
 
 // Chain-level market views (PostgreSQL only — never DexScreener, never a

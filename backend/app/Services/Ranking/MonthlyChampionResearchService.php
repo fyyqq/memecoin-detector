@@ -15,11 +15,11 @@ use Illuminate\Support\Facades\Log;
 use Throwable;
 
 /**
- * Historical Monthly Champion Backfill (Step 25).
+ * Historical Monthly Backfill (Step 25 — Top 3).
  *
- * For a PAST completed month + chain bucket, identify the best-supported #1
- * performing memecoin from research evidence — we do NOT just return
- * "no champion" because our MarketSnapshot history started in late August 2026.
+ * For a PAST completed month + chain bucket, rank the best-supported Top 3
+ * performing memecoins from research evidence — we do NOT just return
+ * "no result" because our MarketSnapshot history started in late August 2026.
  *
  * Flow, per bucket:
  *   1. gather candidates from the configured providers
@@ -30,21 +30,21 @@ use Throwable;
  *   3. validate eligibility as far as the evidence allows: $5M–$200M MARKET CAP
  *      (never FDV), the right bucket, the right month, ≤ 30-day trading age
  *      (`age_uncertain` + lower confidence when the launch date is unknown);
- *   4. rank survivors with the deterministic performance formula
+ *   4. rank survivors (Top 3) with the deterministic participation formula
  *      ({@see MonthlyPerformanceCalculator::scoreHistorical});
- *   5. classify:
- *        FINALIZED                — sufficient evidence (internal-observed
- *                                   eligible winner, an exact DexScreener rank
- *                                   from a source, or a fully-supported
- *                                   historical performer);
- *        BEST_SUPPORTED_CANDIDATE — a real candidate clearly leads but the
- *                                   evidence is incomplete;
- *        NO_VERIFIED_CHAMPION     — no defensible candidate.
+ *   5. classify each ranked row:
+ *        finalized           — a defensible ranked entry (an internal-observed
+ *                              eligible token, an exact DexScreener rank from a
+ *                              source, a fully-supported historical performer,
+ *                              or a real lead on incomplete evidence at
+ *                              `confidence: low`);
+ *        no_verified_result  — no defensible candidate (a single rank-1 row,
+ *                              `token_id` null).
  *
- * NEVER fabricates a winner, a date, a source or a DexScreener rank. NEVER uses
- * the current Risk Assessment. NEVER uses AI. Invoked ONLY by
- * `memecoins:research-monthly-champions` — never the read API, never the daily
- * finalize pass.
+ * NEVER fabricates a candidate, a date, a source, a holder count or a
+ * DexScreener rank. NEVER uses the current Risk Assessment. NEVER uses AI.
+ * Invoked ONLY by `memecoins:research-monthly-champions` — never the read API,
+ * never the daily finalize pass.
  */
 class MonthlyChampionResearchService
 {

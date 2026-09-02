@@ -7,6 +7,7 @@ namespace App\Models;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 /**
  * One ranked "Monthly Top Memecoin" for a calendar month + chain bucket
@@ -149,6 +150,18 @@ class MonthlyRanking extends Model
     public function token(): BelongsTo
     {
         return $this->belongsTo(Token::class);
+    }
+
+    /**
+     * Per-metric historical evidence behind this ranked entry (Step 26).
+     * Read-only from the API layer — written only by the historical research
+     * pipeline. `[]` for `internal_observed` rows and for a `no_verified_result`.
+     *
+     * @return HasMany<MonthlyRankingEvidence, $this>
+     */
+    public function evidence(): HasMany
+    {
+        return $this->hasMany(MonthlyRankingEvidence::class);
     }
 
     /**

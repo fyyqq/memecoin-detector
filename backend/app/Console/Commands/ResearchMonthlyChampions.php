@@ -18,15 +18,15 @@ use Throwable;
  * Historical Monthly Champion Backfill (Step 25).
  *
  * For a PAST completed month + chain bucket, researches external / historical
- * market sources (operator-verified, via the seed file) to identify the
- * best-supported #1 performing memecoin — instead of returning "no champion"
+ * market sources (operator-verified, via the seed file) to rank the
+ * best-supported Top 3 performing memecoins — instead of returning "no result"
  * just because our detector did not exist yet.
  *
  * It NEVER claims an exact DexScreener historical rank unless a source
- * establishes it, NEVER invents a candidate / URL / date, and NEVER scrapes
- * search-engine result pages. Incomplete evidence => `best_supported_candidate`
- * or `no_verified_champion`. Not scheduled — run on demand, one month
- * (five buckets) or one bucket at a time.
+ * establishes it, NEVER invents a candidate / URL / date / holder count, and
+ * NEVER scrapes search-engine result pages. Incomplete evidence =>
+ * `finalized` with `confidence: low`, or `no_verified_result`. Not scheduled —
+ * run on demand, one month (five buckets) or one bucket at a time.
  */
 class ResearchMonthlyChampions extends Command
 {

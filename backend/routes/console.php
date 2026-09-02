@@ -177,18 +177,19 @@ Schedule::command('memecoins:research-narratives')
     ->description('Token origin + popularity narrative research');
 
 /*
-| Monthly Meme Champions (Step 22).
+| Monthly Top Memecoins (Step 25 — Top 3).
 |
-| Runs DAILY at a quiet hour — it refreshes the current `provisional` month and
-| finalizes any not-yet-finalized PAST month. Running daily (not just monthly)
-| makes it self-healing: whatever day it first runs on/after the 1st, the just
-| completed month gets finalized, and finalized months are never re-touched.
-| The command ALWAYS defaults to "previous completed month + current
-| provisional" regardless of when it fires. withoutOverlapping. Reuses the
-| existing scheduler container. The GET API never recomputes.
+| Runs DAILY at a quiet hour — it refreshes the current `provisional` month's 5
+| buckets (incl. the monthly holder pass) and settles any not-yet-settled bucket
+| of a PAST month. Running daily (not just monthly) makes it self-healing:
+| whatever day it first runs on/after the 1st, the just completed month gets
+| settled, and settled months are never re-touched. The command ALWAYS defaults
+| to "previous completed month + current provisional" regardless of when it
+| fires. withoutOverlapping. Reuses the existing scheduler container. The GET
+| API never recomputes.
 */
 Schedule::command('memecoins:finalize-monthly-champion')
     ->dailyAt('00:20')
     ->withoutOverlapping(60)
     ->sendOutputTo($scheduledCommandOutput)
-    ->description('Compute + finalize the Monthly Meme Champion');
+    ->description('Compute + finalize Monthly Top Memecoins (Top 3 per chain bucket)');

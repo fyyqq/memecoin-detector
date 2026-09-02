@@ -258,7 +258,33 @@ The detail API `data.monthly_champion.championships[]` (tracked tokens only) add
 
 ---
 
-## 9. Known limitations
+## 9. Historical research evidence (Step 26 — Phase 1)
+
+Per-metric historical provenance now lives in a **child table**,
+`monthly_ranking_evidence` (`MonthlyRanking::evidence()`), one row per metric per
+source per ranked entry: `metric` (holders / volume / market_cap / ohlcv /
+identity / pool_date), `basis` (**`observed` / `reconstructed` / `estimate`** —
+never "verified"; an estimate is always labelled one and capped at `low`
+confidence), and a **deterministic** `confidence` band derived by
+`HistoricalConfidenceCalculator` from evidence characteristics (source
+credibility, timestamp present, identity verified, basis, corroboration) — never
+hand-typed. A missing metric is an **absent row**, never a fabricated `0`.
+
+Providers declare capabilities explicitly via
+`HistoricalResearchProvider::supportsMetric()`; an unsupported/failed fetch
+returns `HistoricalMetricResult::unavailable()` (never an exception, never an
+invented number). **Holder history has no free automated source** — for past
+months it stays UNKNOWN unless an operator supplies a dated figure.
+**Robinhood** is operator-seed-only (no verified provider network).
+**`web_research` stays OFF.** Full detail:
+[historical-research-foundation.md](historical-research-foundation.md).
+
+Phase 1 is the typed foundation only — the ranking formula, weights, Top-3
+selection, qualification and risk are **unchanged**.
+
+---
+
+## 10. Known limitations
 
 - **Historical data is only as good as the seed file.** Where no operator
   research exists for a completed month/bucket, it is honestly

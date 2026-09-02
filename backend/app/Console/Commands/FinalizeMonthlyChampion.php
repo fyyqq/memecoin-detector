@@ -15,12 +15,12 @@ use Illuminate\Support\Facades\Log;
 use Throwable;
 
 /**
- * "Monthly Top Memecoins" finalization (Step 22, corrected).
+ * "Monthly Top Memecoins" finalization (Step 25 — Top 3).
  *
  * With NO arguments it does the safe daily pass: refresh every chain bucket of
- * the current `provisional` month and settle every not-yet-settled bucket of the
- * previous completed month (so on September 1 it finalizes AUGUST — all five
- * buckets — never September).
+ * the current `provisional` month (incl. the monthly holder pass) and settle
+ * every not-yet-settled bucket of the previous completed month (so on
+ * September 1 it finalizes AUGUST — all five buckets — never September).
  *
  * `--year=` / `--month=` settle one specific month's five buckets; `--chain=`
  * restricts to one bucket. The command refuses to finalize a month that is not

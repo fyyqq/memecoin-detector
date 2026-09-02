@@ -357,9 +357,9 @@ next sprint.
 
 `Token`, `MarketSnapshot`, `IngestionRun`, `HistoricalPeakEvidence`, `PumpEvent`,
 `Evidence`, `PumpExplanation`, `QualificationEvent`, `TokenNarrativeReport`,
-`TokenNarrativeSource`, `MonthlyRanking`, `RiskAssessment`, `RiskSignal` and
-`DailyChainActivity` exist as tables. The rest are documented for naming
-consistency only — do **not** create them yet.
+`TokenNarrativeSource`, `MonthlyRanking`, `MonthlyRankingEvidence`,
+`RiskAssessment`, `RiskSignal` and `DailyChainActivity` exist as tables. The rest
+are documented for naming consistency only — do **not** create them yet.
 
 > **Removed:** the near-real-time Trending Tracking feature (`TrendingSnapshot`,
 > `DailyTrendingRanking`, the `tracked_trend_score`, `memecoins:collect-trending`,
@@ -389,6 +389,7 @@ consistency only — do **not** create them yet.
 | `RiskSignal` | One structured risk signal behind a `RiskAssessment` (Step 24) — `signal_group` (`contract_security`/`exit_safety`/`holder_distribution`/`liquidity`/`pump_dump`/`market_structure`/`age`), `state` (**TRI-STATE** `MEASURED`/`BAD`/`UNKNOWN` + `NOT_AVAILABLE`), `value` / `numeric_value` / `unit`, `severity`, `source` (`goplus`/`geckoterminal`/`dexscreener`/`internal`), `source_checked_at`, `explanation` (**pre-written**, never LLM-generated). `unique(risk_assessment_id, signal_key)`; the full set is REPLACED on every rescan. `UNKNOWN` (null/`""`/missing/unsupported chain) and `NOT_AVAILABLE` (top-trader data — never obtainable) contribute **0** to the score and are never read as "no". No payloads. `belongsTo RiskAssessment` + `belongsTo Token`. | **implemented (Step 24)** |
 | `DailyChainActivity` | One materialised "Chain Market Activity" row per `(date, chain_bucket)` (**unique**) — `total_volume_usd` / `total_liquidity_usd` / `active_token_count` / `top_token_*` / `computed_at`. Recomputed every `memecoins:discover` run (`ChainActivityRollup`) from `tokens` + each token's LATEST `market_snapshot` (deduplicated token-level representative-pair volume, behind `App\Services\Trending\MarketIntegrityGate`). `total_volume_usd` is **REPORTED volume** — never claimed organic. `GET /api/memecoins/chain-activity` reads it ONLY + a day-over-day delta. | **implemented** |
 | `MonthlyRanking` | One **ranked** "Monthly Top Memecoin" per calendar month **per chain bucket** (Step 25, Top 3) — **unique on `(year, month, chain_bucket, rank)`**, `rank ∈ {1,2,3}` → ≤ 12×5×3 = **180 rows/year**. `chain_bucket` = one of the FIVE fixed buckets `solana` / `robinhood` / `bsc` / `base` / `other` (`ChainBucket::forChain(chain_id)`; the token keeps its real `chain_id`, only this column ever says `"other"`; **no** global monthly winner). `status` (`provisional` current / `finalized` completed w/ defensible entries — an entry may be `confidence: low` where thin / `no_verified_result` completed w/ no defensible candidate, single rank-1 row, `token_id` null / `future`). **Ranked by real PARTICIPATION**: `score = 100·Σ(w·strength)/Σ(w)` over the KNOWN components — `holder_strength` (w 0.40, from `holder_count` — a monthly-max / representative count; **null = UNKNOWN → dropped, weights renormalize, never treated as 0, never a current count for a past month**), `volume_strength` (w 0.35, from `monthly_volume_usd` — internal: median in-month `volume_h24`; researched: operator monthly volume), `market_cap_strength` (w 0.25, from `month_market_cap` — month-peak OBSERVED/VERIFIED MC, never FDV/estimate). **Market cap is SUPPORTING — a $150M token does NOT auto-beat a $20M token with stronger holders + volume**; a researched candidate scored on MC alone is ×`MEMECOIN_MONTHLY_MARKET_CAP_ONLY_PENALTY` (0.5). `holder_strength`/`volume_strength`/`market_cap_strength` stored as the audit trail. `market_cap_growth_pct` / `peak_expansion_ratio` / `activity_score` still computed but **INFO-ONLY** — never scored, never ordered. `holder_checked_at` (monthly holder-pass cooldown key). `observation_count` / `observation_coverage_ratio` (< `MEMECOIN_MONTHLY_MIN_OBSERVATION_COVERAGE` 0.25 → `confidence: low`). `scoring_breakdown` (json), **`source_type`** (`internal_observed` / `exact_dexscreener_rank` / `best_supported_historical_performer`) / **`source_reference`** / **`source_evidence`** (json `[{name,url,claim,published_at,credibility}]`) / **`age_uncertain`** / **`confidence`** (`high`/`medium`/`low`, operator suggestion is a ceiling), plus **`champion_*`** (a historically-researched champion NOT in our `tokens` table — `token.id` null, display-only). Tie-break: holder→volume→market-cap strength → coverage → token key. A token appears **once per bucket**. Eligibility = Step 19 universe + age ≤ 30d + month peak in `[$5M, $200M]` + volume/liquidity > 0 + belongs to the bucket (`HISTORICAL_ESTIMATE`/`UNKNOWN` never). **Risk score and AI are NEVER used.** Written ONLY by `memecoins:finalize-monthly-champion` (daily; runs the **monthly holder pass** — GeckoTerminal `/info` for the current provisional month's eligible candidates, ≤ 25/run, 20h cooldown, monthly-max, no `market_snapshots` change) + `memecoins:research-monthly-champions` (on-demand — Top-3 historical backfill from operator-verified seed rows; incomplete evidence → `finalized`/`low` or `no_verified_result`, never fabricated). A settled past row is immutable without `--force`; the GET API never recomputes / researches. `belongsTo Token` / `Token hasMany`. See [docs/monthly-rankings.md](docs/monthly-rankings.md). | **implemented (Step 25 — Top 3)** |
+| `MonthlyRankingEvidence` | One historical metric obtained from one source for one ranked `MonthlyRanking` entry (Step 26 — Phase 1). CHILD table of `monthly_rankings` (`MonthlyRanking hasMany evidence`) — **never selects / orders anything**. `metric` (`holders`/`volume`/`market_cap`/`ohlcv`/`identity`/`pool_date`), `value_numeric` (scalar figure — **null for a missing metric; an absent row, never a fabricated 0**), `observed_at`, `methodology`, **`basis`** (`observed`/`reconstructed`/`estimate` — **never "verified"**; an estimate is always labelled one + hard-capped at `low`), **`confidence`** (`high`/`medium`/`low`/`unknown` — DERIVED deterministically by `HistoricalConfidenceCalculator` from source credibility + timestamp + identity + basis + corroboration, never hand-typed), `limitations`, `metadata` (json — no page bodies), `dedupe_hash` = `sha256(metric + normalized source_name + URL host)`. **Unique on `(monthly_ranking_id, dedupe_hash)`** → idempotent re-research. Written ONLY by the historical research pipeline (later Step 26 phases); read-only from the API. Typed foundation lives in `App\Services\Historical\Research\` (`HistoricalMetric` / `MetricBasis` / `SourceCredibility` / `HistoricalConfidence` / `HistoricalMetricResult` / `HistoricalResearchProvider`). Phase 1 changes **no** ranking behaviour, weights, qualification or risk. See [docs/historical-research-foundation.md](docs/historical-research-foundation.md). | **implemented (Step 26 — Phase 1)** |
 
 ## Processing pipeline (concept)
 
@@ -952,8 +953,27 @@ Explicitly **excluded** from Sprint 1:
   `risk_stale_hours` — the slim remnant of the removed Trending Tracking config).
   Homepage order: **🔥 Recently Crossed $5M → 🟢 Main Memecoin List → 📊 Chain
   Market Activity → 💧 Top Volume by Chain → 🏆 Monthly Top Memecoins**.
+- **Historical research evidence foundation (Step 26 — Phase 1)** — the typed
+  base for evidence-based historical reconstruction of past Monthly Top Memecoins
+  buckets. `App\Services\Historical\Research\`: `HistoricalMetric` (holders /
+  volume / market_cap / ohlcv / identity / pool_date), `MetricBasis`
+  (`observed`/`reconstructed`/`estimate` — never "verified"; an estimate is
+  always labelled + capped at `low`), `SourceCredibility` (shared string tiers
+  with `MonthlyResearchSource`), `HistoricalConfidence` + deterministic
+  `HistoricalConfidenceCalculator`, `HistoricalMetricResult` (unavailable = a
+  first-class value, no fabricated number ever enters scoring), and the
+  MANDATORY-capability `HistoricalResearchProvider` interface
+  (`supportsMetric()`). New CHILD table **`monthly_ranking_evidence`** (per-metric
+  per-source provenance, unique on `(monthly_ranking_id, dedupe_hash)`,
+  `MonthlyRanking hasMany evidence`, read-only from the API). **No** provider,
+  command, scheduler or frontend yet; **no** ranking / weight / qualification /
+  risk change. Holder history has no free automated source (stays UNKNOWN for
+  past months unless operator-seeded); Robinhood is operator-seed-only;
+  `web_research` stays OFF. See
+  [docs/historical-research-foundation.md](docs/historical-research-foundation.md).
 - Tables: `tokens`, `market_snapshots`, `ingestion_runs`,
   `historical_peak_evidences`, `pump_events`, `evidences`, `pump_explanations`,
   `qualification_events`, `token_narrative_reports`, `token_narrative_sources`,
-  `monthly_rankings`, `risk_assessments`, `risk_signals`, `daily_chain_activity`.
+  `monthly_rankings`, `monthly_ranking_evidence`, `risk_assessments`,
+  `risk_signals`, `daily_chain_activity`.
   No queue / related-token graph / auth.

@@ -116,16 +116,16 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Chain buckets (Step 22, corrected)
+    | Chain buckets (Step 25 — Top 3)
     |--------------------------------------------------------------------------
     |
-    | For EVERY calendar month, the top-1 performing memecoin inside each of the
-    | FIVE fixed display buckets: solana, robinhood, bsc, base, other. So the
-    | unique key is (year, month, chain_bucket) — at most 12 x 5 = 60 champions
-    | a year. There is NO global monthly winner. The token keeps its real
-    | `chain_id`; only `monthly_rankings.chain_bucket` says "other". The bucket
-    | list is fixed in App\Services\Ranking\ChainBucket and is intentionally not
-    | env-configurable.
+    | For EVERY calendar month, the TOP 3 performing memecoins inside each of the
+    | FIVE fixed display buckets: solana, robinhood, bsc, base, other. The unique
+    | key is (year, month, chain_bucket, rank) with rank in {1,2,3} — at most
+    | 12 x 5 x 3 = 180 rows a year. There is NO global monthly winner. The token
+    | keeps its real `chain_id`; only `monthly_rankings.chain_bucket` says
+    | "other". The bucket list is fixed in App\Services\Ranking\ChainBucket and
+    | is intentionally not env-configurable.
     |
     */
 
