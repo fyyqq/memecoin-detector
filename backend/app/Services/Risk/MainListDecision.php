@@ -19,11 +19,15 @@ use Carbon\CarbonImmutable;
  * is excluded from the list (its assessment is still on its detail page).
  *
  * MAIN LIST requires ALL of:
- *   B. age >= MEMECOIN_MAIN_MIN_AGE_HOURS
+ *   B. age >= MEMECOIN_MAIN_MIN_AGE_HOURS   (skipped when $requireMaturity is false)
  *   C. risk_level in {LOWER, MEDIUM}
  *   D. data completeness >= MEMECOIN_RISK_MIN_DATA_COMPLETENESS
  *   E. no CRITICAL hard failure
  *   F. no configured hard-risk (HIGH) failure
+ *
+ * `RecentlyCrossedQualifier` reuses this with `$requireMaturity = false` — the
+ * "🔥 Recently Crossed $5M" section screens the SAME risk conditions (C–F) but
+ * has no ≥72h maturity floor.
  */
 final class MainListDecision
 {
@@ -39,7 +43,7 @@ final class MainListDecision
         public readonly ?RiskAssessment $assessment,
     ) {}
 
-    public static function for(Token $token, ?CarbonImmutable $now = null): self
+    public static function for(Token $token, ?CarbonImmutable $now = null, bool $requireMaturity = true): self
     {
         $now ??= CarbonImmutable::now();
 
@@ -48,11 +52,12 @@ final class MainListDecision
 
         $reasons = [];
 
-        // B — maturity.
+        // B — maturity (only when the caller requires it — the Recently Crossed
+        // screen reuses C–F without a maturity floor).
         $ageHours = $token->earliest_pair_created_at !== null
             ? ($now->getTimestamp() - $token->earliest_pair_created_at->getTimestamp()) / 3600.0
             : null;
-        $matureEnough = $ageHours !== null && $ageHours >= $minAgeHours;
+        $matureEnough = ! $requireMaturity || ($ageHours !== null && $ageHours >= $minAgeHours);
         if (! $matureEnough) {
             $reasons[] = 'too_young';
         }

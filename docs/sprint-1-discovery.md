@@ -242,12 +242,14 @@ token can hold both types; the **representative** crossing is the strongest
 batch's existing events, one indexed snapshot query per new `CURRENT_OBSERVATION`
 crossing. Read APIs never create an event and never scan snapshots.
 
-Full detail (data model, precedence, ACTIVE/COOLED, the 48h window, limitations):
+Full detail (data model, precedence, ACTIVE/COOLED, the 30-day window + the
+Recently-Crossed quality gates, limitations):
 [`docs/qualification-events.md`](qualification-events.md).
 
-Config: `config/dexscreener.php` → `recent_crossing.hours` (48) /
-`recent_crossing.max_hours` (168) ← `MEMECOIN_RECENT_CROSSING_HOURS` /
-`MEMECOIN_RECENT_CROSSING_MAX_HOURS`.
+Config: `config/dexscreener.php` → `recent_crossing.*`. `hours` (48) drives the
+narrow `GET /api/memecoins` per-row `recently_crossed` flag (unchanged);
+`window_days` (30) + the quality-gate thresholds drive the
+`GET /api/memecoins/recently-crossed` dashboard section.
 
 ---
 
@@ -631,16 +633,20 @@ Response:
 }
 ```
 
-### `GET /api/memecoins/recently-crossed` (Step 20)
+### `GET /api/memecoins/recently-crossed` (Step 20; strengthened)
 
-Read-only, **PostgreSQL only** — never DexScreener / CoinGecko / GeckoTerminal,
-never writes, never creates a crossing event. Returns currently-**qualified**
-tokens (age ≤ 30d, verified/observed peak in `[$5M, $1B)`) whose
-**representative** crossing landed within the window (default 48h, `?hours=`
-1…168, optional `?chain=`), newest crossing first. A token with current MC
-**below `$5M`** still appears — it previously crossed. Rows carry `ACTIVE`
-(current MC ≥ $5M) / `COOLED` (< $5M). See
-[qualification-events.md](qualification-events.md).
+The "🔥 Recently Crossed $5M" dashboard section. Read-only, **PostgreSQL only** —
+never DexScreener / CoinGecko / GeckoTerminal / GoPlus, never writes, never
+creates a crossing event. Optional `?chain=`; `meta.days` (30). A memecoin
+appears only when it passes **every** gate: representative crossing within the
+last **30 days** (`recent_crossing.window_days`) · pool age ≤ 30d (separate) ·
+verified/observed peak in `[$5M, $1B)` · discovery freshness
+(`last_observed_at` fresh) · risk screen (LOWER/MEDIUM, no critical security
+failure) · holder participation vs current MC · 24h volume vs current MC (rejects
+`$50M MC / $7.2K volume`) · liquidity. Gates live in
+`App\Services\Historical\RecentlyCrossedQualifier`. A token with current MC
+**below `$5M`** still appears (`COOLED`) — it previously crossed. Newest crossing
+first. See [qualification-events.md](qualification-events.md).
 
 ```jsonc
 {
@@ -1706,14 +1712,24 @@ mocked (`Tests\Concerns\FakesDexScreener`) — no live calls.
   the verified one is representative (original CO row preserved) / identity is
   chain + address / **the discovery pipeline records the crossing and a second
   run is idempotent** / the detail endpoint exposes `qualification_timeline`.
-- **`Feature/RecentlyCrossedTest`** (Step 20) — `GET /api/memecoins/recently-crossed`
-  returns tokens crossed within the default 48h window / is read-only and makes
-  **no** provider calls (`Http::assertNothingSent`, ≤ 6 queries) / `?hours=`
-  widens the window / `?hours=` is capped at 168 (`422` above / at 0) / a token
-  **below $5M now** still appears if it recently crossed (`COOLED`) / a token
-  ≥ $5M shows `ACTIVE` / an estimate-only token never appears / an age > 30d
-  token is excluded (record kept) / the **representative** crossing drives window
-  membership / newest crossing first.
+- **`Feature/RecentlyCrossedTest`** (Step 20; strengthened) —
+  `GET /api/memecoins/recently-crossed`: returns memecoins whose crossing is
+  within the last **30 days** (exactly 30d in, 31d out) / the **representative**
+  crossing drives window membership / an age > 30d pool is excluded even with a
+  fresh crossing (record kept) — crossing-date ≠ pool-age / the `[$5M, $1B)` band
+  (floor inclusive, ceiling exclusive — exactly $1B out) / a `COOLED` token below
+  $5M still appears / an estimate-only token never appears / **risk gate**: HIGH
+  / CRITICAL-honeypot / `RISK UNKNOWN` / unscreened rejected, MEDIUM passes /
+  **holder gate**: a $50M / 20-holder anomaly rejected, $50M / 8,000 holders
+  passes, missing (UNKNOWN) holder evidence rejected when required / **volume
+  gate**: `$50M MC / $7.2K volume` rejected, zero / missing volume rejected, a
+  healthy ratio passes, very high volume is NOT rejected / **liquidity gate**:
+  zero / below the $10K absolute floor / below the relative floor rejected,
+  deep liquidity passes / **discovery freshness**: a token not observed for 4d
+  rejected, a fresh one passes / the combined `$50M / $7.2K / few-holders`
+  fixture cannot appear / `ACTIVE` vs `COOLED` / newest crossing first /
+  `?chain=` narrows / read-only, **no** provider calls (`Http::assertNothingSent`,
+  ≤ 8 queries).
 - **`Feature/MemecoinDetailTest`** (Step 15 nested shape) —
   `GET /api/memecoins/{chainId}/{tokenAddress}`: returns the token / identified by
   chain + address (same address, two chains → two tokens) / a symbol is **not** a

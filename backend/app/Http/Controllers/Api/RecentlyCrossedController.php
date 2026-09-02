@@ -7,6 +7,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\HistoricalPeakEvidence;
 use App\Models\Token;
+use App\Services\Historical\RecentlyCrossedQualifier;
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Database\Query\Builder;
 use Illuminate\Http\JsonResponse;
@@ -15,44 +16,54 @@ use Illuminate\Http\Request;
 /**
  * GET /api/memecoins/recently-crossed
  *
- * Read-only. Straight from PostgreSQL — NEVER calls DexScreener, CoinGecko or
- * GeckoTerminal, never writes, never runs discovery, never creates a
- * QualificationEvent.
+ * The "🔥 Recently Crossed $5M" dashboard section. Read-only. Straight from
+ * PostgreSQL — NEVER calls DexScreener, CoinGecko, GeckoTerminal or GoPlus,
+ * never writes, never runs discovery, never creates a QualificationEvent.
  *
- * Returns currently-qualified tokens: age <= 30d AND a verified/observed peak
- * `$5M <= peak < $1B` (floor inclusive, ceiling EXCLUSIVE) whose REPRESENTATIVE
- * "$5M crossing" (HISTORICAL_VERIFIED over CURRENT_OBSERVATION) happened within
- * the window (default 48h, `?hours=` up to a safe max of 168). Newest crossing
- * first.
+ * A token appears ONLY when it satisfies ALL of:
+ *   - its REPRESENTATIVE "$5M crossing" (`qualification_events.crossed_at`,
+ *     HISTORICAL_VERIFIED over CURRENT_OBSERVATION) is within the last
+ *     `recent_crossing.window_days` (default 30) — the persisted crossing date,
+ *     NEVER derived from the current market cap;
+ *   - age ≤ 30d (pool age — a SEPARATE concept from "crossed within 30 days");
+ *   - a verified/observed peak market cap in `[$5M, $1B)` (real market cap,
+ *     never FDV; floor inclusive, ceiling exclusive);
+ *   - it passes every deterministic quality gate in
+ *     {@see RecentlyCrossedQualifier} — discovery freshness, risk screen
+ *     (LOWER/MEDIUM, no critical security failure), holder participation vs
+ *     current MC, 24h volume vs current MC, and liquidity.
  *
- * A token whose current MC is now BELOW $5M can still appear — the floor is a
- * peak rule and this endpoint is about the crossing, not the current price.
+ * A token whose current MC is now BELOW $5M can still appear (COOLED) — the
+ * floor is a peak rule. A token that crossed $5M but fails a quality gate does
+ * NOT appear (see the empty-state copy).
  */
 class RecentlyCrossedController extends Controller
 {
+    public function __construct(private readonly RecentlyCrossedQualifier $qualifier) {}
+
     public function __invoke(Request $request): JsonResponse
     {
-        $maxHours = (int) config('dexscreener.recent_crossing.max_hours');
-
         $validated = $request->validate([
-            'hours' => ['sometimes', 'integer', 'min:1', 'max:'.$maxHours],
             'chain' => ['sometimes', 'string', 'max:40', 'regex:/^[A-Za-z0-9_-]+$/'],
         ]);
 
-        $hours = (int) ($validated['hours'] ?? config('dexscreener.recent_crossing.hours'));
         $chain = isset($validated['chain']) ? mb_strtolower($validated['chain']) : null;
 
+        $windowDays = (int) config('dexscreener.recent_crossing.window_days', 30);
         $maxAgeDays = (int) config('dexscreener.filters.max_age_days');
         $peakMin = (float) config('dexscreener.filters.observed_peak_market_cap_min_usd');
         $peakMax = (float) config('dexscreener.filters.observed_peak_market_cap_max_usd');
+        $freshnessHours = (int) config('dexscreener.recent_crossing.discovery_freshness_hours', 48);
 
         $now = CarbonImmutable::now();
         $ageCutoff = $now->subDays($maxAgeDays);
-        $windowStart = $now->subHours($hours);
+        $windowStart = $now->subDays($windowDays);
 
         $tokens = Token::query()
             ->whereNotNull('earliest_pair_created_at')
             ->where('earliest_pair_created_at', '>=', $ageCutoff)
+            // Discovery freshness — the pipeline has surfaced this token recently.
+            ->where('last_observed_at', '>=', $now->subHours($freshnessHours))
             ->where(function (Builder $query) use ($peakMin): void {
                 $query->where('observed_peak_market_cap', '>=', $peakMin)
                     ->orWhere(function (Builder $q) use ($peakMin): void {
@@ -60,6 +71,7 @@ class RecentlyCrossedController extends Controller
                             ->where('historical_peak_value', '>=', $peakMin);
                     });
             })
+            // Verified/observed peak in [$5M, $1B) — floor inclusive, ceiling EXCLUSIVE.
             ->whereRaw(
                 'GREATEST(COALESCE(observed_peak_market_cap, 0), COALESCE(historical_peak_value, 0)) < ?',
                 [$peakMax],
@@ -68,13 +80,24 @@ class RecentlyCrossedController extends Controller
             // At least one crossing exists in the window — the precise
             // representative-in-window check happens in PHP below.
             ->whereHas('qualificationEvents', fn (Builder $q) => $q->where('crossed_at', '>=', $windowStart))
-            ->with(['latestSnapshot', 'historicalPeakEvidence', 'qualificationEvents'])
+            ->with(['latestSnapshot', 'historicalPeakEvidence', 'qualificationEvents', 'riskAssessment.signals'])
             ->get();
 
         $rows = $tokens
-            ->map(function (Token $token) use ($now): ?array {
+            ->map(function (Token $token) use ($now, $windowStart): ?array {
                 $event = $token->representativeQualificationEvent();
                 if ($event === null || $event->crossed_at === null) {
+                    return null;
+                }
+
+                // The REPRESENTATIVE crossing must itself be inside the window.
+                if ($event->crossed_at->getTimestamp() < $windowStart->getTimestamp()) {
+                    return null;
+                }
+
+                // Deterministic quality gates (risk / holders / volume / liquidity /
+                // discovery freshness). PostgreSQL-only.
+                if (! $this->qualifier->evaluate($token, $now)->qualifies) {
                     return null;
                 }
 
@@ -100,8 +123,6 @@ class RecentlyCrossedController extends Controller
                 ];
             })
             ->filter()
-            // Keep only tokens whose REPRESENTATIVE crossing is inside the window.
-            ->filter(fn (array $row): bool => $row['_crossed_at_ts'] >= $windowStart->getTimestamp())
             ->sortByDesc('_crossed_at_ts')
             ->map(function (array $row): array {
                 unset($row['_crossed_at_ts']);
@@ -114,11 +135,14 @@ class RecentlyCrossedController extends Controller
         return response()->json([
             'data' => $rows,
             'meta' => [
-                'hours' => $hours,
+                'days' => $windowDays,
                 'count' => count($rows),
                 'retrieved_at' => $now->toIso8601String(),
                 'source' => 'postgresql',
-                'note' => 'Tokens whose verified/observed $5M crossing occurred within the window. A token below $5M now can still appear — it previously crossed the threshold.',
+                'note' => 'Memecoins whose verified/observed $5M crossing occurred within the last '
+                    .$windowDays.' days AND that pass the current quality gates (risk screen, holder '
+                    .'participation, 24h volume vs market cap, liquidity, active discovery). A token '
+                    .'below $5M now can still appear — it previously crossed the threshold.',
             ],
         ]);
     }

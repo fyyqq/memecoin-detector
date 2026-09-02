@@ -29,7 +29,8 @@ export interface RecentlyCrossedRow {
 export interface RecentlyCrossedResponse {
   data: RecentlyCrossedRow[]
   meta: {
-    hours: number
+    /** Crossing window in days (default 30). */
+    days: number
     count: number
     retrieved_at: string
     source: string

@@ -62,9 +62,9 @@ HISTORICAL_VERIFIED  >  CURRENT_OBSERVATION
 The other row is **preserved untouched** for the record. So if we first observe
 a crossing today, then CoinGecko later verifies the token actually crossed ten
 days ago, the representative crossing becomes the (earlier, more accurate)
-verified one — and the token correctly drops out of a 48-hour "recently crossed"
-window. The original current-observation record still shows in the detail-page
-timeline.
+verified one — and the token correctly drops out of the 30-day "recently
+crossed" window. The original current-observation record still shows in the
+detail-page timeline.
 
 ---
 
@@ -149,13 +149,21 @@ Crossed $5M" for the length of the window.
 
 ---
 
-## The 48-hour window
+## The crossing window
 
-`recently_crossed` = representative `crossed_at ≥ now − MEMECOIN_RECENT_CROSSING_HOURS`
-(default **48**, `config('dexscreener.recent_crossing.hours')`).
+Two independent windows:
 
-`GET /api/memecoins/recently-crossed?hours=` overrides it, capped at
-`MEMECOIN_RECENT_CROSSING_MAX_HOURS` (default **168** = 7 days).
+- **`GET /api/memecoins`** per-row `recently_crossed` boolean — representative
+  `crossed_at ≥ now − MEMECOIN_RECENT_CROSSING_HOURS` (default **48h**,
+  `config('dexscreener.recent_crossing.hours')`). A narrow "just crossed" flag on
+  the main list. Unchanged.
+- **`GET /api/memecoins/recently-crossed`** (the "🔥 Recently Crossed $5M"
+  dashboard section) — representative `crossed_at ≥ now − window_days` (default
+  **30 days**, `MEMECOIN_RECENT_CROSSING_WINDOW_DAYS`). No `?hours=` / `?days=`
+  override.
+
+"Crossed within 30 days" is a **crossing-date** rule and is **separate** from the
+`age ≤ 30 days` **pool-age** rule below — both apply.
 
 ---
 
@@ -192,14 +200,42 @@ the main leaderboard on every crossing would disorient regular dashboard users.
 
 ### `GET /api/memecoins/recently-crossed`
 
-Read-only. **PostgreSQL only — never DexScreener / CoinGecko / GeckoTerminal**,
-never writes, never creates an event.
+The "🔥 Recently Crossed $5M" dashboard section. Read-only. **PostgreSQL only —
+never DexScreener / CoinGecko / GeckoTerminal / GoPlus**, never writes, never
+creates an event. Optional `?chain=`. `meta.days` (30) is echoed.
 
-- default window 48h; `?hours=` (1 … 168); optional `?chain=`.
-- returns currently-**qualified** tokens (age ≤ 30d, verified/observed peak in
-  `[$5M, $1B)`) whose **representative** crossing is inside the window.
-- a token with current MC **below `$5M`** still appears — it previously crossed.
-- newest crossing first.
+A memecoin appears **only** when it satisfies ALL of:
+
+1. **crossing** — representative `crossed_at` within the last 30 days (the
+   persisted event date, never derived from the current market cap);
+2. **pool age** ≤ 30 days (`earliest_pair_created_at` — separate from #1);
+3. **market cap** — verified/observed peak in `[$5M, $1B)` (real market cap,
+   never FDV; floor inclusive, ceiling exclusive);
+4. **discovery freshness** — the discovery pipeline observed the token within
+   `MEMECOIN_RECENT_CROSSING_DISCOVERY_FRESHNESS_HOURS` (48h). We do **not**
+   persist which feed (trending meta / boost / profile) surfaced a token, so a
+   fresh `last_observed_at` is the honest token-level "still being
+   discovered / trending" signal — a token that fell off every discovery feed
+   goes stale here. *(Known limitation — see Future Considerations in the PR.)*
+5. **risk screen** — `App\Services\Risk\MainListDecision` with `requireMaturity:
+   false`: `risk_level ∈ {LOWER, MEDIUM}`, screening `completed`, data
+   completeness ≥ min, no CRITICAL/HIGH hard override (no honeypot / cannot-buy /
+   cannot-sell / mintable / …). An unscreened / `RISK UNKNOWN` token is rejected.
+6. **holder participation** — a MEASURED `holder_count` risk signal is required
+   (`MEMECOIN_RECENT_CROSSING_REQUIRE_HOLDER_EVIDENCE`); `holder_count /
+   (current_market_cap / 1e6)` ≥ `MEMECOIN_RECENT_CROSSING_MIN_HOLDERS_PER_MILLION_MCAP`
+   (5). Current MC, never a fabricated count.
+7. **24h volume vs CURRENT market cap** — `volume_h24 / current_market_cap` ≥
+   `MEMECOIN_RECENT_CROSSING_MIN_VOLUME_TO_MCAP_RATIO` (0.001). Rejects e.g.
+   `$50M MC / $7.2K volume` (0.000144). Never FDV, never peak MC; high volume is
+   never a reject; zero / missing volume is a reject.
+8. **liquidity** — `liquidity_usd` ≥ `MEMECOIN_RISK_MIN_LIQUIDITY_USD` (the
+   existing hard floor, $10K) **and** ≥ current MC ×
+   `MEMECOIN_RECENT_CROSSING_MIN_LIQUIDITY_TO_MCAP_RATIO` (0.001).
+
+Gates 4–8 live in `App\Services\Historical\RecentlyCrossedQualifier`
+(deterministic, PostgreSQL-only). A token with current MC **below `$5M`** still
+appears (`COOLED`) — it previously crossed. Newest crossing first.
 
 ```jsonc
 {

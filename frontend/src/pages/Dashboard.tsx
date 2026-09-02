@@ -93,7 +93,7 @@ export function Dashboard() {
     [],
   )
 
-  const recentHours = crossed?.meta.hours ?? 48
+  const recentDays = crossed?.meta.days ?? 30
   const retrievedAt = crossed?.meta.retrieved_at
 
   const refreshAll = () => {
@@ -118,7 +118,7 @@ export function Dashboard() {
 
       <RecentlyCrossedSection
         rows={crossed?.data ?? []}
-        hours={recentHours}
+        days={recentDays}
         loading={crossedLoading}
         error={crossedError}
         onRetry={() => void loadCrossed(chain)}

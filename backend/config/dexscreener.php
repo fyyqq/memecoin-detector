@@ -144,14 +144,59 @@ return [
     ],
 
     /*
-    | "Recently Crossed $5M" (Step 20). A token counts as recently_crossed when
-    | its representative crossing event's `crossed_at` is within this many hours
-    | of now. `GET /api/memecoins/recently-crossed?hours=` may override the
-    | default up to `max_hours`.
+    | "Recently Crossed $5M" (Step 20).
+    |
+    | `hours` — used by GET /api/memecoins for the per-row `recently_crossed`
+    | boolean + `meta.recent_crossing_hours`. A narrow "just crossed" signal on
+    | the (UI-less, still-tested) main list. Unchanged.
+    |
+    | `window_days` — the crossing window for GET /api/memecoins/recently-crossed
+    | (the "🔥 Recently Crossed $5M" dashboard section). A token appears there
+    | only when its REPRESENTATIVE `qualification_events.crossed_at` is within
+    | this many days AND it passes every deterministic quality gate below.
+    |
+    | The quality gates (all PostgreSQL-only, no provider calls — see
+    | App\Services\Historical\RecentlyCrossedQualifier):
+    |   - discovery freshness: the discovery pipeline (trending-meta-first) must
+    |     have observed the token within `discovery_freshness_hours`. This is the
+    |     only token-level "still being discovered/trending" signal we persist —
+    |     we do NOT store which specific feed (meta / boost / profile) surfaced a
+    |     token, so a stale `last_observed_at` is the honest proxy for "fell off
+    |     every discovery feed".
+    |   - risk screen: reuses App\Services\Risk\MainListDecision (risk_level in
+    |     {LOWER, MEDIUM}, screening completed, data completeness OK, no hard
+    |     override) — WITHOUT the main-list ≥72h maturity gate.
+    |   - holder participation: a MEASURED `holder_count` risk signal is required
+    |     (`require_holder_evidence`); holders / ($MC / 1e6) must be
+    |     >= `min_holders_per_million_mcap`. Current MC, never fabricated.
+    |   - 24h volume vs CURRENT market cap: `volume_h24 / current_market_cap`
+    |     must be >= `min_volume_to_mcap_ratio` (rejects e.g. $50M MC / $7.2K
+    |     volume). Never FDV, never peak MC. High volume is never a reject.
+    |   - liquidity: `liquidity_usd` >= risk.liquidity.min_total_usd AND
+    |     >= current MC * `min_liquidity_to_mcap_ratio`.
     */
     'recent_crossing' => [
         'hours' => max(1, (int) env('MEMECOIN_RECENT_CROSSING_HOURS', 48)),
         'max_hours' => max(1, (int) env('MEMECOIN_RECENT_CROSSING_MAX_HOURS', 168)),
+
+        'window_days' => max(1, (int) env('MEMECOIN_RECENT_CROSSING_WINDOW_DAYS', 30)),
+
+        'discovery_freshness_hours' => max(1, (int) env('MEMECOIN_RECENT_CROSSING_DISCOVERY_FRESHNESS_HOURS', 48)),
+
+        // Holder floor. The risk screen's `per_million_reference` (50) is the
+        // SOFT "thin" warning; this is a stricter HARD reject for obvious
+        // anomalies ($50M / 20 holders = 0.4 per $1M).
+        'min_holders_per_million_mcap' => (float) env('MEMECOIN_RECENT_CROSSING_MIN_HOLDERS_PER_MILLION_MCAP', 5.0),
+        'require_holder_evidence' => filter_var(env('MEMECOIN_RECENT_CROSSING_REQUIRE_HOLDER_EVIDENCE', true), FILTER_VALIDATE_BOOL),
+
+        // 24h volume must be at least this fraction of CURRENT market cap.
+        // $50M MC / $7.2K volume = 0.000144 -> rejected. 0.001 = 0.1% of MC
+        // traded in 24h; a legitimately quiet day still clears this.
+        'min_volume_to_mcap_ratio' => (float) env('MEMECOIN_RECENT_CROSSING_MIN_VOLUME_TO_MCAP_RATIO', 0.001),
+
+        // Relative liquidity floor (on top of the absolute
+        // risk.liquidity.min_total_usd). 0.001 = liquidity >= 0.1% of MC.
+        'min_liquidity_to_mcap_ratio' => (float) env('MEMECOIN_RECENT_CROSSING_MIN_LIQUIDITY_TO_MCAP_RATIO', 0.001),
     ],
 
     /*

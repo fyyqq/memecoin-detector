@@ -11,15 +11,14 @@ export class MemecoinApiError extends Error {
 
 /**
  * Fetch the "Recently Crossed $5M" feed. Laravel-only, PostgreSQL-only — never
- * DexScreener. `hours` widens/narrows the window (server max 168); `chain`
- * filters to one real DexScreener chain id.
+ * DexScreener. Fixed 30-day crossing window + quality gates on the server.
+ * `chain` filters to one real DexScreener chain id.
  */
 export async function fetchRecentlyCrossed(
-  { chain, hours }: { chain?: string; hours?: number } = {},
+  { chain }: { chain?: string } = {},
   signal?: AbortSignal,
 ): Promise<RecentlyCrossedResponse> {
   const params = new URLSearchParams()
-  if (hours) params.set('hours', String(hours))
   if (chain) params.set('chain', chain)
   const url = `${API_BASE_URL}/api/memecoins/recently-crossed${
     params.toString() ? `?${params}` : ''

@@ -4,21 +4,22 @@ import { formatRelativeTime, formatUsd } from '../lib/format'
 
 interface RecentlyCrossedSectionProps {
   rows: RecentlyCrossedRow[]
-  hours: number
+  days: number
   loading: boolean
   error: string
   onRetry: () => void
 }
 
 /**
- * "🔥 Recently Crossed $5M" — the compact card list of tokens whose
- * verified/observed $5M crossing landed inside the recent window. A token whose
- * current MC has since fallen below $5M still appears (COOLED); the floor is a
- * peak rule.
+ * "🔥 Recently Crossed $5M" — the compact card list of memecoins whose
+ * verified/observed $5M crossing landed inside the last 30 days AND that pass
+ * the server-side quality gates (risk screen, holder participation, 24h volume
+ * vs market cap, liquidity, active discovery). A token whose current MC has
+ * since fallen below $5M still appears (COOLED); the floor is a peak rule.
  */
 export function RecentlyCrossedSection({
   rows,
-  hours,
+  days,
   loading,
   error,
   onRetry,
@@ -34,7 +35,7 @@ export function RecentlyCrossedSection({
     <section className="recently-crossed">
       <div className="section-heading">
         <h2>🔥 Recently Crossed $5M</h2>
-        <span className="muted">last {hours}h</span>
+        <span className="muted">last {days} days</span>
       </div>
 
       {loading && rows.length === 0 && <p className="state">Loading…</p>}
@@ -49,7 +50,10 @@ export function RecentlyCrossedSection({
       )}
 
       {!loading && !error && rows.length === 0 && (
-        <p className="muted">No tracked memecoin has crossed $5M in the last {hours} hours.</p>
+        <p className="muted">
+          No tracked memecoin has crossed $5M and passed the current quality filters in the last{' '}
+          {days} days.
+        </p>
       )}
 
       {rows.length > 0 && (

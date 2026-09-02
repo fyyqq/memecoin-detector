@@ -454,11 +454,16 @@ In scope:
    historical observation", never "never crossed $5M".
 7. Display detected trending candidates in the React dashboard, showing the data
    source and retrieval timestamp.
-8. (Step 20) Record **when** each token crossed the $5M floor
+8. (Step 20; strengthened) Record **when** each token crossed the $5M floor
    (`qualification_events` — `CURRENT_OBSERVATION` / `HISTORICAL_VERIFIED` only,
-   never an estimate) and surface a **"Recently Crossed $5M"** dashboard section
-   + detail-page qualification timeline. The $5M/$1B/age/volume/liquidity rules
-   are unchanged.
+   never an estimate) and surface a **"🔥 Recently Crossed $5M"** dashboard
+   section (crossed within the last **30 days** AND passes every deterministic
+   quality gate — peak `[$5M, $1B)`, discovery freshness, risk screen
+   LOWER/MEDIUM + no critical security failure, holders per $1M of current MC,
+   24h volume vs current MC, liquidity;
+   `App\Services\Historical\RecentlyCrossedQualifier`) + a detail-page
+   qualification timeline. The crossing event semantics and the $5M / $1B / age
+   rules are unchanged.
 9. (Step 25 — Top 3) **"Monthly Top Memecoins"** — for every calendar month, the
    **Top 3** performers inside **each of FIVE fixed chain buckets** (solana /
    robinhood / bsc / base / other), ranked by real **participation** —
@@ -631,16 +636,32 @@ Explicitly **excluded** from Sprint 1:
   last). Default stays peak-ranked: the dashboard's "Recently Crossed $5M"
   section already serves recency. `?chain=` / `?limit=` (default 20, max 50).
   ≤ 3 queries + 1 for the events, no N+1.
-- **Read API `GET /api/memecoins/recently-crossed`** (Step 20) — read-only,
-  PostgreSQL only, never calls DexScreener / CoinGecko / GeckoTerminal, never
-  writes, never creates an event. Returns currently-**qualified** tokens (age
-  ≤ 30d, verified/observed peak in `[$5M, $1B)`) whose **representative**
-  `QualificationEvent.crossed_at` is within the window (default 48h,
-  `MEMECOIN_RECENT_CROSSING_HOURS`; `?hours=` 1…168 =
-  `MEMECOIN_RECENT_CROSSING_MAX_HOURS`; optional `?chain=`), newest crossing
-  first. **A token with current MC below $5M still appears** — the floor is a
-  peak rule. Rows carry `status` `ACTIVE` (current MC ≥ $5M) / `COOLED` (< $5M) —
-  never alarmist. `config('dexscreener.recent_crossing.*')`.
+- **Read API `GET /api/memecoins/recently-crossed`** (Step 20; strengthened) —
+  the "🔥 Recently Crossed $5M" dashboard section. Read-only, PostgreSQL only,
+  never calls DexScreener / CoinGecko / GeckoTerminal / GoPlus, never writes,
+  never creates an event. Optional `?chain=`; `meta.days` (30). A memecoin
+  appears **only** when it passes ALL of: representative
+  `QualificationEvent.crossed_at` within the last **30 days**
+  (`MEMECOIN_RECENT_CROSSING_WINDOW_DAYS` — the persisted event date, never
+  derived from current MC; SEPARATE from the ≤ 30d pool-age gate) · verified/
+  observed peak in `[$5M, $1B)` (real MC, never FDV) · **discovery freshness**
+  (`last_observed_at` within `MEMECOIN_RECENT_CROSSING_DISCOVERY_FRESHNESS_HOURS`
+  48h — the only persisted token-level "still discovered" signal; we don't store
+  which feed surfaced a token) · **risk screen** (`MainListDecision` with
+  `requireMaturity: false` — LOWER/MEDIUM, screening completed, completeness OK,
+  no CRITICAL/HIGH hard override; no honeypot / cannot-buy / cannot-sell /
+  mintable / …; unscreened + `RISK UNKNOWN` rejected) · **holder participation**
+  (a MEASURED `holder_count` signal required; `holders / (currentMc/1e6)` ≥
+  `MEMECOIN_RECENT_CROSSING_MIN_HOLDERS_PER_MILLION_MCAP` 5) · **24h volume vs
+  CURRENT MC** (`volume_h24 / current_market_cap` ≥
+  `MEMECOIN_RECENT_CROSSING_MIN_VOLUME_TO_MCAP_RATIO` 0.001 — rejects `$50M MC /
+  $7.2K vol`; zero/missing vol rejected; high vol never rejected) · **liquidity**
+  (≥ `MEMECOIN_RISK_MIN_LIQUIDITY_USD` AND ≥ currentMc ×
+  `MEMECOIN_RECENT_CROSSING_MIN_LIQUIDITY_TO_MCAP_RATIO` 0.001). Gates 4–8 live in
+  `App\Services\Historical\RecentlyCrossedQualifier` (deterministic). **A token
+  with current MC below $5M still appears** (`COOLED`) — the floor is a peak
+  rule. Rows carry `status` `ACTIVE`/`COOLED` — never alarmist, never says
+  "safe". `config('dexscreener.recent_crossing.*')`.
 - **Detail API `GET /api/memecoins/{chainId}/{tokenAddress}`** — read-only,
   PostgreSQL only, never calls DexScreener / CoinGecko / GeckoTerminal / GoPlus.
   Identity is `(chain_id, token_address)`, never the symbol. Step 24 adds
@@ -674,9 +695,11 @@ Explicitly **excluded** from Sprint 1:
   **Header** (title + **chain filter** — real DexScreener chain ids: All Chains /
   Solana / Ethereum / BSC / Base / Robinhood / Arbitrum / Polygon / Avalanche /
   Optimism / PulseChain; **no `Other`** — that is a Monthly display bucket only —
-  + Refresh, 60s auto-refresh) → **🔥 Recently Crossed $5M** (Step 20 — compact
-  card list Token / Chain / Crossed / Current MC / Peak MC / `ACTIVE`|`COOLED`;
-  the header chain filter narrows it via `?chain=`) → **🏆 Monthly Top Memecoins**
+  + Refresh, 60s auto-refresh) → **🔥 Recently Crossed $5M** (compact card list
+  Token / Chain / Crossed / Current MC / Peak MC / `ACTIVE`|`COOLED`; "last 30
+  days"; the header chain filter narrows it via `?chain=`; a memecoin appears
+  only if it also passes the server-side quality gates — see the read-API bullet
+  above) → **🏆 Monthly Top Memecoins**
   (Step 25 — calendar 3×4 grid, 2 cols tablet / 1 col mobile; each month card
   lists the FIVE chain buckets Solana/Robinhood/BSC/Base/Other, each with up to
   **3 compact ranked rows** `🥇/🥈/🥉 $SYMBOL · score · $MC · N holders`
@@ -795,11 +818,13 @@ Explicitly **excluded** from Sprint 1:
   never rewritten. Representative crossing = `HISTORICAL_VERIFIED` >
   `CURRENT_OBSERVATION`. Read APIs never create an event or scan snapshots.
   Surfaces on `GET /api/memecoins` (`qualification_crossed_at` /
-  `qualification_crossing_type` / `recently_crossed`, `?sort=recent_crossing`),
-  the new `GET /api/memecoins/recently-crossed`, and the detail
-  `qualification_timeline`. Backfill is lazy — a pre-Step-20 token gets its event
-  the next time it's rediscovered while still age-eligible. Config:
-  `config/dexscreener.php` → `recent_crossing.*`. Docs:
+  `qualification_crossing_type` / `recently_crossed` — a narrow 48h flag,
+  unchanged, `?sort=recent_crossing`), the `GET /api/memecoins/recently-crossed`
+  section (a **30-day** crossing window + the deterministic quality gates in
+  `App\Services\Historical\RecentlyCrossedQualifier` — see its read-API bullet),
+  and the detail `qualification_timeline`. Backfill is lazy — a pre-Step-20 token
+  gets its event the next time it's rediscovered while still age-eligible.
+  Config: `config/dexscreener.php` → `recent_crossing.*`. Docs:
   `docs/qualification-events.md`.
 - **Token Narrative Intelligence (Step 21)** — `php artisan memecoins:research-narratives`
   `[--force] [--token=chain:address]`, scheduled **hourly** (`0 * * * *`,
