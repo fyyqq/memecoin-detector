@@ -162,6 +162,43 @@ Schedule::command('memecoins:screen-risk')
     ->description('Deterministic memecoin risk & safety screening (contract / holder / liquidity / pump-dump)');
 
 /*
+| Post-30-Day Memecoin Tracking — "previously approved by Recently Crossed"
+| marker.
+|
+| Once a token passes the ENTIRE "🔥 Recently Crossed $5M" predicate (age <= 30d
+| + representative $5M crossing in-window + verified/observed peak in [$5M, $1B)
+| + every deterministic quality gate), its `recently_crossed_qualified_at` is
+| stamped ONCE and never cleared. When the pool later ages past 30 days the
+| token continues into "📈 Post-30-Day Memecoins" on the strength of that
+| historical approval — even if it has since dumped, gone stale, or been
+| re-screened HIGH/CRITICAL.
+|
+| Runs on the discovery cadence, offset AFTER risk screening (so the risk gate
+| sees fresh data) and BEFORE the evidence offset:
+|
+|   discovery (+ historical qualification)  (minute 0, 10, 20, …)
+|   pump detection                          (minute 5, 15, 25, …)
+|   risk screening                          (minute 6, 16, 26, …)
+|   recently-crossed approval marker        (minute 7, 17, 27, …)
+|   evidence collection                     (minute 8, 18, 28, …)
+|
+| PostgreSQL-only, no external calls. withoutOverlapping. Reuses the existing
+| scheduler container. The read APIs never invoke it.
+*/
+$markOffset = min($interval - 1, $riskOffset + max(1, (int) round($interval / 10)));
+$markMinutes = [];
+for ($m = $markOffset; $m < 60; $m += $interval) {
+    $markMinutes[] = $m;
+}
+$markCron = implode(',', $markMinutes).' * * * *';
+
+Schedule::command('memecoins:mark-recently-crossed')
+    ->cron($markCron)
+    ->withoutOverlapping(15)
+    ->sendOutputTo($scheduledCommandOutput)
+    ->description('Stamp tokens that pass the full Recently Crossed gates for Post-30-Day tracking');
+
+/*
 | Token Narrative Intelligence (Step 21).
 |
 | "Why was this coin created?" + "Why did it become popular?" — token-level,

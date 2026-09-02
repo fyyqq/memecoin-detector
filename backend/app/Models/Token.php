@@ -43,6 +43,7 @@ class Token extends Model
         'earliest_pair_created_at',
         'first_observed_at',
         'last_observed_at',
+        'recently_crossed_qualified_at',
         'observed_peak_market_cap',
         'observed_peak_market_cap_at',
         'historical_peak_value',
@@ -59,6 +60,7 @@ class Token extends Model
             'earliest_pair_created_at' => 'immutable_datetime',
             'first_observed_at' => 'immutable_datetime',
             'last_observed_at' => 'immutable_datetime',
+            'recently_crossed_qualified_at' => 'immutable_datetime',
             'observed_peak_market_cap' => 'float',
             'observed_peak_market_cap_at' => 'immutable_datetime',
             'historical_peak_value' => 'float',
@@ -103,6 +105,65 @@ class Token extends Model
                 'GREATEST(COALESCE(observed_peak_market_cap, 0), COALESCE(historical_peak_value, 0)) < ?',
                 [$peakMax],
             );
+    }
+
+    /**
+     * The DB-level filters shared by the "🔥 Recently Crossed $5M" listing
+     * (RecentlyCrossedController) and the `memecoins:mark-recently-crossed`
+     * approval marker: recent pool age (<= max_age_days), fresh discovery, a
+     * verified/observed peak in `[$5M, $1B)`, and at least one crossing event
+     * inside the window. The caller still applies the
+     * representative-crossing-in-window check and the RecentlyCrossedQualifier
+     * quality gates in PHP, and adds its own `?chain=` filter.
+     *
+     * @param  Builder<Token>  $query
+     */
+    public function scopeRecentlyCrossedListingCandidate(Builder $query, ?CarbonImmutable $now = null): void
+    {
+        $now ??= CarbonImmutable::now();
+        $maxAgeDays = (int) config('dexscreener.filters.max_age_days');
+        $peakMin = (float) config('dexscreener.filters.observed_peak_market_cap_min_usd');
+        $peakMax = (float) config('dexscreener.filters.observed_peak_market_cap_max_usd');
+        $windowDays = (int) config('dexscreener.recent_crossing.window_days', 30);
+        $freshnessHours = (int) config('dexscreener.recent_crossing.discovery_freshness_hours', 48);
+
+        $query->whereNotNull('earliest_pair_created_at')
+            ->where('earliest_pair_created_at', '>=', $now->subDays($maxAgeDays))
+            ->where('last_observed_at', '>=', $now->subHours($freshnessHours))
+            ->where(function (Builder $q) use ($peakMin): void {
+                $q->where('observed_peak_market_cap', '>=', $peakMin)
+                    ->orWhere(function (Builder $q2) use ($peakMin): void {
+                        $q2->where('historical_peak_status', HistoricalPeakEvidence::STATUS_HISTORICAL_VERIFIED)
+                            ->where('historical_peak_value', '>=', $peakMin);
+                    });
+            })
+            ->whereRaw(
+                'GREATEST(COALESCE(observed_peak_market_cap, 0), COALESCE(historical_peak_value, 0)) < ?',
+                [$peakMax],
+            )
+            ->whereHas('qualificationEvents', fn (Builder $q) => $q->where('crossed_at', '>=', $now->subDays($windowDays)));
+    }
+
+    /**
+     * "📈 Post-30-Day Memecoins" membership: a token PREVIOUSLY approved by the
+     * Recently Crossed flow (`recently_crossed_qualified_at` stamped, never
+     * cleared) whose pool age has now moved BEYOND the new-token window
+     * (age > max_age_days, using the same `earliest_pair_created_at` semantics).
+     *
+     * Exactly `max_age_days` old stays in the first lifecycle stage; strictly
+     * older enters this list. Historical approval is preserved regardless of
+     * current market cap, volume, discovery freshness or risk level.
+     *
+     * @param  Builder<Token>  $query
+     */
+    public function scopePostThirtyDayTracked(Builder $query, ?CarbonImmutable $now = null): void
+    {
+        $now ??= CarbonImmutable::now();
+        $maxAgeDays = (int) config('dexscreener.filters.max_age_days');
+
+        $query->whereNotNull('recently_crossed_qualified_at')
+            ->whereNotNull('earliest_pair_created_at')
+            ->where('earliest_pair_created_at', '<', $now->subDays($maxAgeDays));
     }
 
     /** @return HasMany<PumpEvent, $this> */

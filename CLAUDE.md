@@ -102,7 +102,7 @@ memecoin-detector/
 │   │   ├── api/         memecoins.ts, memecoinDetail.ts (Laravel only)
 │   │   ├── types/       memecoin.ts, memecoinDetail.ts
 │   │   ├── lib/         format.ts ($74.6M / 8d / % / timestamps), qualification.ts, risk.ts
-│   │   ├── components/  ChainFilter, RecentlyCrossedSection, MarketCapSparkline, TokenNarrativeSection, RiskChip, CopyAddress
+│   │   ├── components/  ChainFilter, RecentlyCrossedSection, PostThirtyDaySection, MarketCapSparkline, TokenNarrativeSection, RiskChip, CopyAddress
 │   │   ├── pages/       Dashboard.tsx, MemecoinDetail.tsx
 │   │   └── App.tsx      React Router: / and /memecoin/:chainId/:tokenAddress
 │   ├── vite.config.ts  host: true, port 5180
@@ -401,7 +401,7 @@ rest are documented for naming consistency only — do **not** create them yet.
 
 | Concept          | Meaning | Status |
 | ---------------- | ------- | ------ |
-| `Token`          | A memecoin (chain + address identity). Unique on `(chain_id, token_address)`. Carries `observed_peak_market_cap` (+`_at`) = OUR OWN snapshot peak; SEPARATE `historical_peak_value` (+`_at`) = a VERIFIED/OBSERVED market cap that qualifies the main list; SEPARATE `historical_estimate_fdv_usd` (+`_at`) = a GeckoTerminal FDV-basis estimate (informational, never qualifies); `historical_peak_status` = the raw label. `first/last_observed_at`, `earliest_pair_created_at`. | **implemented (minimal)** |
+| `Token`          | A memecoin (chain + address identity). Unique on `(chain_id, token_address)`. Carries `observed_peak_market_cap` (+`_at`) = OUR OWN snapshot peak; SEPARATE `historical_peak_value` (+`_at`) = a VERIFIED/OBSERVED market cap that qualifies the main list; SEPARATE `historical_estimate_fdv_usd` (+`_at`) = a GeckoTerminal FDV-basis estimate (informational, never qualifies); `historical_peak_status` = the raw label. `first/last_observed_at`, `earliest_pair_created_at`. `recently_crossed_qualified_at` = when the token FIRST passed the whole "Recently Crossed $5M" predicate — the persisted "previously approved" marker for the **Post-30-Day** list; written ONCE by `memecoins:mark-recently-crossed`, never cleared or rewritten. | **implemented (minimal)** |
 | `MarketSnapshot` | One market observation for a token at `observed_at` (price, market cap, fdv, liquidity, volume, txns, primary pair). Many rows per token. No raw payloads. | **implemented (minimal)** |
 | `IngestionRun`   | One execution of the discovery pipeline — `trigger` (`manual`/`scheduled`), `status` (`running`/`completed`/`failed`), `started/completed_at`, funnel counts, `error_message`, plus Step 19 trending-meta coverage (`trending_meta_count`, `trending_meta_pairs_seen`, `trending_meta_unique_candidates`, `pre_filtered_candidates`, `discovery_source_counts` json, `trending_meta_slugs_used` json). Observability only. | **implemented (minimal)** |
 | `HistoricalPeakEvidence` | One row per token (upserted, re-evaluable): `status` (`CURRENT_OBSERVATION`/`HISTORICAL_VERIFIED`/`HISTORICAL_ESTIMATE`/`UNKNOWN`), `peak_value_usd`, `evidence_source` (dexscreener/coingecko/geckoterminal), `evidence_basis` (market_cap/fdv_total_supply/current_market_cap), `source_reference`, `confidence`, `checked_at`. No provider JSON. **Only `CURRENT_OBSERVATION` / `HISTORICAL_VERIFIED` with `peak_value_usd` in `[$5M, $1B)` qualify the main list** (`qualifies($min, $max)`; `peakAboveCeiling($min, $max)` flags a peak that cleared the floor but exceeds the ceiling); `HISTORICAL_ESTIMATE` is `isInformationalEstimate()` only. | **implemented** |
@@ -473,6 +473,16 @@ In scope:
    `App\Services\Historical\RecentlyCrossedQualifier`) + a detail-page
    qualification timeline. The crossing event semantics and the $5M / $1B / age
    rules are unchanged.
+8b. (Post-30-Day tracking) A token that passed the whole Recently Crossed
+   predicate gets `tokens.recently_crossed_qualified_at` stamped ONCE
+   (`memecoins:mark-recently-crossed`, on the discovery cadence, offset after
+   `screen-risk`). When its pool age crosses 30 days it leaves Recently Crossed
+   and continues in the **"📈 Post-30-Day Memecoins"** dashboard section
+   (`GET /api/memecoins/post-30-day`) — the SAME `earliest_pair_created_at` age
+   rule (> 30d), historical approval preserved even after a dump / stale
+   discovery / a HIGH-risk rescreen, current metrics + current risk still shown.
+   No re-discovery, no new qualification system, no new table. Recently Crossed
+   (age ≤ 30d) and Post-30-Day (age > 30d) never overlap.
 9. *(removed — monthly-removal pass)* **"🏆 Monthly Top Memecoins"** homepage
    section + the detail-page "Monthly Top Performer" block,
    `GET /api/memecoins/monthly-champions`, the whole `App\Services\Ranking\*` +
@@ -659,6 +669,24 @@ Explicitly **excluded** from Sprint 1:
   with current MC below $5M still appears** (`COOLED`) — the floor is a peak
   rule. Rows carry `status` `ACTIVE`/`COOLED` — never alarmist, never says
   "safe". `config('dexscreener.recent_crossing.*')`.
+- **Read API `GET /api/memecoins/post-30-day`** — the "📈 Post-30-Day Memecoins"
+  dashboard section. Read-only, PostgreSQL only, never calls a provider, never
+  writes. A memecoin appears **only** when it was PREVIOUSLY approved by the
+  Recently Crossed flow (`tokens.recently_crossed_qualified_at` NOT NULL —
+  stamped by `memecoins:mark-recently-crossed`) **AND** its pool age is now
+  **> `max_age_days` (30)** (same `earliest_pair_created_at` semantics; exactly
+  30d stays in Recently Crossed, strictly older enters here). This is a
+  **continuation list, not a new qualification** — no re-discovery, no re-cross,
+  no re-screen: the token STAYS after it dumps below $5M (`COOLED`), goes stale,
+  or is re-screened HIGH/CRITICAL. It shows current observable metrics +
+  `risk_level`/`risk_score` (`risk_status: "pending"` when unscreened) — never
+  "safe". `?chain=` (real chain id); `?sort=` ∈ `market_cap` / `volume` /
+  `peak_market_cap` (default) / `age` / `liquidity` / `holders`; `?direction=`
+  `asc` / `desc` (default `desc`). Deterministic sort — nulls last, ties break on
+  peak MC then token id. ≤ 500 rows fetched, sorted in PHP.
+  `App\Http\Controllers\Api\PostThirtyDayController` +
+  `Token::scopePostThirtyDayTracked`. Recently Crossed (≤ 30d) and Post-30-Day
+  (> 30d) can never overlap.
 - **Detail API `GET /api/memecoins/{chainId}/{tokenAddress}`** — read-only,
   PostgreSQL only, never calls DexScreener / CoinGecko / GeckoTerminal / GoPlus.
   Identity is `(chain_id, token_address)`, never the symbol. Step 24 adds
@@ -686,8 +714,9 @@ Explicitly **excluded** from Sprint 1:
   all-null / empty when no crossing recorded), `provenance`. **Dashboard
   qualification is NOT an existence gate** — any stored `Token` resolves. Miss →
   `404 {"error": "Memecoin not found."}`. ≤ 8 queries, no N+1.
-- **React dashboard** reads `GET /api/memecoins/recently-crossed` only (this
-  app's API — never DexScreener / a provider / a WebSocket). Homepage:
+- **React dashboard** reads `GET /api/memecoins/recently-crossed` +
+  `GET /api/memecoins/post-30-day` only (this app's API — never DexScreener / a
+  provider / a WebSocket). Homepage:
   **Header** (title + **chain filter** — real DexScreener chain ids: All Chains /
   Solana / Ethereum / BSC / Base / Robinhood / Arbitrum / Polygon / Avalanche /
   Optimism / PulseChain; no generic "Other" — the header filter is real chains
@@ -695,8 +724,14 @@ Explicitly **excluded** from Sprint 1:
   list Token / Chain / Crossed / Current MC / Peak MC / `ACTIVE`|`COOLED`; "last
   30 days"; the header chain filter narrows it via `?chain=`; a memecoin appears
   only if it also passes the server-side quality gates — see the read-API bullet
-  above) → footer. That is the whole dashboard. Never says "real/organic
-  volume". Never talks to DexScreener / GoPlus / any security provider.
+  above) → **📈 Post-30-Day Memecoins** (previously-approved memecoins now older
+  than 30 days; its OWN chain filter + sort dropdown (Peak / Current MC / 24h Vol
+  / Liquidity / Holders / Age) + asc/desc toggle, independent of the header;
+  compact table Token / Chain / Age / Current MC / Peak MC / 24h Vol / Liquidity
+  / Risk chip; empty-state "No previously approved memecoins have moved beyond 30
+  days yet.") → footer. That is the whole dashboard. Never says "real/organic
+  volume", never "trending" / "top performers" / "safe". Never talks to
+  DexScreener / GoPlus / any security provider.
 - **React token detail page** (`/memecoin/:chainId/:tokenAddress`, React Router)
   reads `GET /api/memecoins/{chainId}/{tokenAddress}` only (for data). Sections:
   header (middle-truncated CA + copy + back link), **live market chart** (Step 17
@@ -877,8 +912,20 @@ Explicitly **excluded** from Sprint 1:
   RISK · CRITICAL — AVOID · RISK UNKNOWN · DISQUALIFIED. `config/risk.php`.
   Docs: [docs/risk-screening.md](docs/risk-screening.md) +
   [docs/memecoin-risk-reconnaissance.md](docs/memecoin-risk-reconnaissance.md).
+- **Post-30-Day Memecoin Tracking** — `php artisan memecoins:mark-recently-crossed`,
+  scheduled `7,17,27,37,47,57 * * * *` (the discovery cadence, offset AFTER
+  `screen-risk` so the risk gate sees fresh data, BEFORE the evidence offset;
+  `withoutOverlapping`; reuses the `scheduler` container). PostgreSQL-only — no
+  external calls, no discovery. `RecentlyCrossedApprovalMarker` reuses exactly
+  the Recently Crossed predicate (`Token::scopeRecentlyCrossedListingCandidate` —
+  extracted + also consumed by `RecentlyCrossedController`, behaviour unchanged —
+  + representative-crossing-in-window + `RecentlyCrossedQualifier`) and stamps
+  `tokens.recently_crossed_qualified_at` ONCE for each passing token
+  (`whereNull` guard → idempotent, never cleared, never rewritten). That marker
+  feeds `GET /api/memecoins/post-30-day` (age > 30d). Never changes Recently
+  Crossed, qualification, `observed_peak_market_cap`, pumps, evidence or risk.
 - **Dashboard** — homepage: **Header (real-chain filter + Refresh) → 🔥 Recently
-  Crossed $5M → footer**. That is the whole dashboard. Removed over successive
+  Crossed $5M → 📈 Post-30-Day Memecoins → footer**. Removed over successive
   passes: **"🟢 Main Memecoin List"**, **"📊 Chain Market Activity"**,
   **"💧 Top Volume by Chain"** (+ `GET /api/memecoins/top-volume` /
   `/chain-activity`, `DailyChainActivity` + `daily_chain_activity`,

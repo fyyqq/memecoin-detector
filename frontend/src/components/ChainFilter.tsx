@@ -7,9 +7,8 @@
  * `robinhood`. The backend accepts any valid chain id — this list is the UI
  * convenience for the common ones.
  *
- * NOTE: this is NOT the Monthly "Other" display bucket. "Other" is a
- * `monthly_rankings.chain_bucket` grouping used only by "Monthly Top Memecoins";
- * it is deliberately absent here.
+ * There is deliberately no generic "Other" option — every entry is a real
+ * chain. Shared by the header (Recently Crossed) and the Post-30-Day section.
  */
 
 const CHAIN_OPTIONS: Array<{ value: string; label: string }> = [

@@ -1,9 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { API_BASE_URL, fetchRecentlyCrossed, MemecoinApiError } from '../api/memecoins'
+import {
+  API_BASE_URL,
+  fetchPostThirtyDay,
+  fetchRecentlyCrossed,
+  MemecoinApiError,
+} from '../api/memecoins'
 import { ChainFilter } from '../components/ChainFilter'
+import { PostThirtyDaySection } from '../components/PostThirtyDaySection'
 import { RecentlyCrossedSection } from '../components/RecentlyCrossedSection'
 import { formatDateTime } from '../lib/format'
-import type { RecentlyCrossedResponse } from '../types/memecoin'
+import type {
+  PostThirtyDayResponse,
+  PostThirtyDaySort,
+  RecentlyCrossedResponse,
+  SortDirection,
+} from '../types/memecoin'
 
 const AUTO_REFRESH_MS = 60_000
 
@@ -14,8 +25,17 @@ export function Dashboard() {
   const [crossed, setCrossed] = useState<RecentlyCrossedResponse | null>(null)
   const [crossedLoading, setCrossedLoading] = useState(true)
   const [crossedError, setCrossedError] = useState('')
-
   const crossedAbortRef = useRef<AbortController | null>(null)
+
+  // "Post-30-Day Memecoins" — its own chain + sort controls, independent of the
+  // header filter (which drives Recently Crossed).
+  const [postChain, setPostChain] = useState('')
+  const [postSort, setPostSort] = useState<PostThirtyDaySort>('peak_market_cap')
+  const [postDirection, setPostDirection] = useState<SortDirection>('desc')
+  const [post, setPost] = useState<PostThirtyDayResponse | null>(null)
+  const [postLoading, setPostLoading] = useState(true)
+  const [postError, setPostError] = useState('')
+  const postAbortRef = useRef<AbortController | null>(null)
 
   const message = (error: unknown, fallback: string) =>
     error instanceof MemecoinApiError ? error.message : fallback
@@ -40,22 +60,53 @@ export function Dashboard() {
     }
   }, [])
 
+  const loadPost = useCallback(
+    async (nextChain: string, sort: PostThirtyDaySort, direction: SortDirection) => {
+      postAbortRef.current?.abort()
+      const controller = new AbortController()
+      postAbortRef.current = controller
+      setPostLoading(true)
+      try {
+        setPost(
+          await fetchPostThirtyDay(
+            { chain: nextChain || undefined, sort, direction },
+            controller.signal,
+          ),
+        )
+        setPostError('')
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') return
+        setPostError(message(error, 'Unable to load post-30-day memecoins.'))
+      } finally {
+        if (postAbortRef.current === controller) setPostLoading(false)
+      }
+    },
+    [],
+  )
+
   useEffect(() => {
     // oxlint-disable-next-line react/set-state-in-effect
     void loadCrossed(chain)
   }, [chain, loadCrossed])
 
-  // Gentle auto-refresh — every minute.
+  useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect
+    void loadPost(postChain, postSort, postDirection)
+  }, [postChain, postSort, postDirection, loadPost])
+
+  // Gentle auto-refresh — every minute, both sections.
   useEffect(() => {
     const timer = window.setInterval(() => {
       void loadCrossed(chain)
+      void loadPost(postChain, postSort, postDirection)
     }, AUTO_REFRESH_MS)
     return () => window.clearInterval(timer)
-  }, [chain, loadCrossed])
+  }, [chain, postChain, postSort, postDirection, loadCrossed, loadPost])
 
   useEffect(
     () => () => {
       crossedAbortRef.current?.abort()
+      postAbortRef.current?.abort()
     },
     [],
   )
@@ -86,6 +137,19 @@ export function Dashboard() {
         onRetry={() => void loadCrossed(chain)}
       />
 
+      <PostThirtyDaySection
+        response={post}
+        chain={postChain}
+        sort={postSort}
+        direction={postDirection}
+        loading={postLoading}
+        error={postError}
+        onChainChange={setPostChain}
+        onSortChange={setPostSort}
+        onDirectionToggle={() => setPostDirection((d) => (d === 'desc' ? 'asc' : 'desc'))}
+        onRetry={() => void loadPost(postChain, postSort, postDirection)}
+      />
+
       <footer className="provenance">
         <p>
           Data source: <strong>DexScreener</strong> (documented APIs only)
@@ -93,8 +157,9 @@ export function Dashboard() {
         </p>
         <p className="muted">
           Market-cap figures are provider-reported. The dashboard reads persisted data from this
-          app&rsquo;s API only (<code>{API_BASE_URL}/api/memecoins/recently-crossed</code>). It never
-          calls DexScreener or any provider directly, and never opens a WebSocket.
+          app&rsquo;s API only (<code>{API_BASE_URL}/api/memecoins/recently-crossed</code> and{' '}
+          <code>/api/memecoins/post-30-day</code>). It never calls DexScreener or any provider
+          directly, and never opens a WebSocket.
         </p>
       </footer>
     </main>

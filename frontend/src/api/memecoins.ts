@@ -1,4 +1,9 @@
-import type { RecentlyCrossedResponse } from '../types/memecoin'
+import type {
+  PostThirtyDayResponse,
+  PostThirtyDaySort,
+  RecentlyCrossedResponse,
+  SortDirection,
+} from '../types/memecoin'
 
 const API_BASE_URL = (import.meta.env.VITE_API_URL ?? 'http://localhost:8010').replace(/\/$/, '')
 
@@ -25,6 +30,29 @@ export async function fetchRecentlyCrossed(
   }`
 
   return getJson<RecentlyCrossedResponse>(url, signal)
+}
+
+/**
+ * Fetch the "Post-30-Day Memecoins" feed — memecoins previously approved by the
+ * Recently Crossed flow whose pool is now older than 30 days. Laravel-only,
+ * PostgreSQL-only. `chain` filters to one real chain; `sort` / `direction` are
+ * applied by the backend.
+ */
+export async function fetchPostThirtyDay(
+  {
+    chain,
+    sort,
+    direction,
+  }: { chain?: string; sort?: PostThirtyDaySort; direction?: SortDirection } = {},
+  signal?: AbortSignal,
+): Promise<PostThirtyDayResponse> {
+  const params = new URLSearchParams()
+  if (chain) params.set('chain', chain)
+  if (sort) params.set('sort', sort)
+  if (direction) params.set('direction', direction)
+  const url = `${API_BASE_URL}/api/memecoins/post-30-day${params.toString() ? `?${params}` : ''}`
+
+  return getJson<PostThirtyDayResponse>(url, signal)
 }
 
 async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {

@@ -4,6 +4,7 @@ use App\Http\Controllers\Api\MemecoinDetailController;
 use App\Http\Controllers\Api\MemecoinDiscoveryController;
 use App\Http\Controllers\Api\MemecoinDiscoveryStatusController;
 use App\Http\Controllers\Api\MemecoinListController;
+use App\Http\Controllers\Api\PostThirtyDayController;
 use App\Http\Controllers\Api\RecentlyCrossedController;
 use Illuminate\Support\Facades\Route;
 
@@ -26,6 +27,12 @@ Route::get('/memecoins/discovery-status', MemecoinDiscoveryStatusController::cla
 // calls DexScreener / CoinGecko / GeckoTerminal / GoPlus. Defined before the
 // {chainId}/{tokenAddress} route so the literal segment always wins.
 Route::get('/memecoins/recently-crossed', RecentlyCrossedController::class);
+
+// Read-only "📈 Post-30-Day Memecoins" feed — memecoins previously approved by
+// the Recently Crossed flow whose pool is now older than 30 days. PostgreSQL
+// only, never calls a provider, never writes. Defined before the
+// {chainId}/{tokenAddress} route so the literal segment always wins.
+Route::get('/memecoins/post-30-day', PostThirtyDayController::class);
 
 // Read-only token detail — PostgreSQL only, never calls DexScreener. Identity is
 // (chainId, tokenAddress); dashboard qualification is NOT applied here.

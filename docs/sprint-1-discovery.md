@@ -670,7 +670,46 @@ and `qualification_basis` is always `current_market_cap` or `market_cap`, never
 is a `hasOne`. Both are eager-loaded with `->with([...])`. One query for the
 filtered/sorted tokens, one window-function subquery join for their latest
 snapshots, one for their evidence rows — **≤ 3 queries total, independent of row
-count**.
+count**. The DB-level filters are the `Token::scopeRecentlyCrossedListingCandidate`
+scope, shared verbatim with the Post-30-Day approval marker (below).
+
+### `GET /api/memecoins/post-30-day` — "📈 Post-30-Day Memecoins"
+
+The continuation list: memecoins **previously approved** by the Recently Crossed
+flow whose pool has since aged past 30 days. Read-only, **PostgreSQL only** —
+never a provider, never writes, never re-runs discovery.
+
+A token appears only when **both**: `tokens.recently_crossed_qualified_at` is
+stamped (the persisted "previously approved" marker — see the marker command
+below) **AND** its `earliest_pair_created_at` age is **strictly > 30 days**
+(`dexscreener.filters.max_age_days` — exactly 30d stays in Recently Crossed).
+Because Recently Crossed requires age ≤ 30d and this list requires age > 30d,
+**a token can never be in both at once**.
+
+This is **not** a re-qualification. Once approved, a token stays here after it
+dumps below $5M (`status: "COOLED"`), loses discovery freshness, or is
+re-screened HIGH/CRITICAL — the historical approval lineage is preserved. Current
+observable metrics + the current `risk_level` / `risk_score` (`risk_status:
+"pending"` when unscreened) are shown for transparency; the product never says
+"safe".
+
+`?chain=` (real chain id) · `?sort=` ∈ `market_cap` / `volume` /
+`peak_market_cap` (default) / `age` / `liquidity` / `holders` · `?direction=`
+`asc` / `desc` (default `desc`). Sorting is deterministic: nulls always last,
+ties break on peak market cap then token id. ≤ 500 rows fetched then sorted in
+PHP (same pattern as `GET /api/memecoins`). `App\Http\Controllers\Api\PostThirtyDayController`
++ `Token::scopePostThirtyDayTracked`.
+
+**The marker** — `php artisan memecoins:mark-recently-crossed`, scheduled
+`7,17,27,37,47,57 * * * *` (discovery cadence, offset AFTER `memecoins:screen-risk`
+so the risk gate sees fresh data, BEFORE the evidence offset;
+`withoutOverlapping`; reuses the `scheduler` container). `RecentlyCrossedApprovalMarker`
+evaluates the **identical** Recently Crossed predicate (the shared candidate
+scope + representative-crossing-in-window + `RecentlyCrossedQualifier`) and
+stamps `recently_crossed_qualified_at = now()` for each passing token whose
+column is still null. Written once, **never cleared, never rewritten**. It
+touches only that one column — never qualification, `observed_peak_market_cap`,
+pump events, evidence or risk.
 
 **Why the frontend never calls DexScreener:** a discovery run takes 15–30 s and
 hits rate-limited endpoints. The browser must stay fast and must not multiply
@@ -680,15 +719,22 @@ observations through Laravel; ingestion is the scheduler's job.
 **Dashboard** (`frontend/`, React + TS + Vite):
 `src/api/memecoins.ts` (fetch, typed, abortable) · `src/types/memecoin.ts` ·
 `src/lib/format.ts` (`$74.6M`, `8d`, timestamps) ·
-`src/components/{ChainFilter,RecentlyCrossedSection}.tsx` · `src/App.tsx`.
+`src/components/{ChainFilter,RecentlyCrossedSection,PostThirtyDaySection}.tsx` ·
+`src/App.tsx`.
 The whole dashboard is: **Header** (title + a **chain filter** of real
 DexScreener chain ids — All Chains / Solana / Ethereum / BSC / Base / Robinhood /
 Arbitrum / Polygon / Avalanche / Optimism / PulseChain — + a **Refresh** button
 and a gentle 60 s auto-refresh) → **🔥 Recently Crossed $5M** (compact card list
 Token / Chain / Crossed / Current MC / Peak MC / `ACTIVE`|`COOLED`, "last 30
 days", from `GET /api/memecoins/recently-crossed`; the header chain filter
-narrows it via `?chain=`) → footer (`Data source: DexScreener` + last-retrieved
-time). States: loading / ready / empty / error (no stack traces).
+narrows it via `?chain=`) → **📈 Post-30-Day Memecoins** (previously-approved
+memecoins now older than 30 days, from `GET /api/memecoins/post-30-day`; its own
+chain filter + a sort dropdown — Peak MC / Current MC / 24h Volume / Liquidity /
+Holders / Age — + an asc/desc toggle, all independent of the header; compact
+table Token / Chain / Age / Current MC / Peak MC / 24h Vol / Liquidity / Risk
+chip; empty-state "No previously approved memecoins have moved beyond 30 days
+yet.") → footer (`Data source: DexScreener` + last-retrieved time). States:
+loading / ready / empty / error (no stack traces).
 
 Removed over successive passes: **"🟢 Main Memecoin List"**, **"📊 Chain Market
 Activity"**, **"💧 Top Volume by Chain"** and **"🏆 Monthly Top Memecoins"** (the
@@ -1117,7 +1163,9 @@ docker compose exec postgres createdb -U memecoin memecoin_test
 | `DTOs\DexScreener\TokenCandidateData` | Immutable normalized current observation. |
 | `DTOs\DexScreener\QualifiedCandidate` | `TokenCandidateData` + persisted peak figures → `toArray()` = the API item. |
 | `Services\Historical\QualificationEventRecorder` | Step 20 — upserts `qualification_events` rows for tokens whose evidence proves a verified/observed crossing in `[$5M, $1B)`. One batch pre-load query; idempotent. Pipeline-only. |
-| `Http\Controllers\Api\RecentlyCrossedController` | Step 20 — `GET /api/memecoins/recently-crossed`. Read-only, PostgreSQL only. |
+| `Http\Controllers\Api\RecentlyCrossedController` | Step 20 — `GET /api/memecoins/recently-crossed`. Read-only, PostgreSQL only. DB filters = `Token::scopeRecentlyCrossedListingCandidate`. |
+| `Http\Controllers\Api\PostThirtyDayController` | Post-30-Day tracking — `GET /api/memecoins/post-30-day`. Read-only, PostgreSQL only. `Token::scopePostThirtyDayTracked` (marker stamped + age > 30d) + `?chain=` / `?sort=` / `?direction=`, deterministic sort (nulls last, tie-break peak MC then id). |
+| `Services\Historical\RecentlyCrossedApprovalMarker` | Post-30-Day tracking — reuses the shared candidate scope + `RecentlyCrossedQualifier` to stamp `tokens.recently_crossed_qualified_at` once per passing token. `memecoins:mark-recently-crossed` only; never cleared. |
 | `Services\Narrative\NarrativeResearchService` | Step 21 — orchestrates one narrative run: collect sources (origin + popularity) via `NarrativeResearchProvider`s, rank + persist them, ask the `NarrativeExplanationProvider`, validate each section independently, persist the report. Cooldown / partial / provider-failure isolation. Command-only. |
 | `Services\Narrative\{TokenOriginResearchService,TokenPopularityResearchService,NarrativeSourceRanker,NarrativeEvidenceRecorder,NarrativeExplanationService,NarrativeExplanationValidator}` | Step 21 support — source collection, quality tiering, idempotent persistence, AI call + validation. |
 | `Services\Narrative\Providers\{InternalEvidenceResearchProvider,GdeltNarrativeResearchProvider,AnthropicNarrativeExplanationProvider,NullNarrativeExplanationProvider}` | Step 21 providers — the always-on internal baseline, token-level GDELT, and the swappable AI vendor (chosen by `NARRATIVE_AI_PROVIDER`, separate binding). |
@@ -1647,6 +1695,26 @@ mocked (`Tests\Concerns\FakesDexScreener`) — no live calls.
   fixture cannot appear / `ACTIVE` vs `COOLED` / newest crossing first /
   `?chain=` narrows / read-only, **no** provider calls (`Http::assertNothingSent`,
   ≤ 8 queries).
+- **`Feature/PostThirtyDayTest`** — `GET /api/memecoins/post-30-day`: a
+  previously-approved token aged 31d / 45d is in, 20d is not, exactly 30d is not
+  (31d is) / a never-approved old token is excluded even with a $5M crossing on
+  record / approval **survives** a dump below $5M (`COOLED`), stale discovery,
+  and a later HIGH-risk rescreen (current risk shown) / an unscreened approved
+  token still appears with `risk_status: "pending"` / `?chain=` narrows to one
+  real chain / `?sort=` market_cap / volume asc + desc, default `peak_market_cap`
+  desc, ties break on peak then id, null metrics sort last both directions,
+  invalid sort/direction → 422 / a token can never be in both Recently Crossed
+  and Post-30-Day / read-only, **no** provider calls, no writes, ≤ 8 queries /
+  payload + empty-state shape.
+- **`Feature/MarkRecentlyCrossedTest`** — `memecoins:mark-recently-crossed`:
+  stamps a token that passes every gate (at `now()`) / does NOT stamp on a
+  failed risk gate / a crossing outside the window / age > 30d / no crossing
+  event / the marker is **never rewritten** on a later run and **never cleared**
+  when the token later fails a gate / makes no external calls.
+- **`Feature/PostThirtyDaySchedulerTest`** — `memecoins:mark-recently-crossed`
+  scheduled `7,17,27,37,47,57 * * * *` (discovery cadence, strictly after
+  `screen-risk` :06 and before `collect-evidence` :08) / `withoutOverlapping` /
+  in `schedule:list` / no new scheduler container.
 - **`Feature/MemecoinDetailTest`** (Step 15 nested shape) —
   `GET /api/memecoins/{chainId}/{tokenAddress}`: returns the token / identified by
   chain + address (same address, two chains → two tokens) / a symbol is **not** a

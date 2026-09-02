@@ -5,11 +5,9 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use App\Models\HistoricalPeakEvidence;
 use App\Models\Token;
 use App\Services\Historical\RecentlyCrossedQualifier;
 use Carbon\CarbonImmutable;
-use Illuminate\Contracts\Database\Query\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -50,36 +48,17 @@ class RecentlyCrossedController extends Controller
         $chain = isset($validated['chain']) ? mb_strtolower($validated['chain']) : null;
 
         $windowDays = (int) config('dexscreener.recent_crossing.window_days', 30);
-        $maxAgeDays = (int) config('dexscreener.filters.max_age_days');
-        $peakMin = (float) config('dexscreener.filters.observed_peak_market_cap_min_usd');
-        $peakMax = (float) config('dexscreener.filters.observed_peak_market_cap_max_usd');
-        $freshnessHours = (int) config('dexscreener.recent_crossing.discovery_freshness_hours', 48);
 
         $now = CarbonImmutable::now();
-        $ageCutoff = $now->subDays($maxAgeDays);
         $windowStart = $now->subDays($windowDays);
 
+        // Shared DB-level filters (recent pool age, discovery freshness, peak in
+        // band, a crossing event in the window). The precise
+        // representative-crossing-in-window check + the deterministic quality
+        // gates run in PHP below.
         $tokens = Token::query()
-            ->whereNotNull('earliest_pair_created_at')
-            ->where('earliest_pair_created_at', '>=', $ageCutoff)
-            // Discovery freshness — the pipeline has surfaced this token recently.
-            ->where('last_observed_at', '>=', $now->subHours($freshnessHours))
-            ->where(function (Builder $query) use ($peakMin): void {
-                $query->where('observed_peak_market_cap', '>=', $peakMin)
-                    ->orWhere(function (Builder $q) use ($peakMin): void {
-                        $q->where('historical_peak_status', HistoricalPeakEvidence::STATUS_HISTORICAL_VERIFIED)
-                            ->where('historical_peak_value', '>=', $peakMin);
-                    });
-            })
-            // Verified/observed peak in [$5M, $1B) — floor inclusive, ceiling EXCLUSIVE.
-            ->whereRaw(
-                'GREATEST(COALESCE(observed_peak_market_cap, 0), COALESCE(historical_peak_value, 0)) < ?',
-                [$peakMax],
-            )
+            ->recentlyCrossedListingCandidate($now)
             ->when($chain, fn ($query) => $query->where('chain_id', $chain))
-            // At least one crossing exists in the window — the precise
-            // representative-in-window check happens in PHP below.
-            ->whereHas('qualificationEvents', fn (Builder $q) => $q->where('crossed_at', '>=', $windowStart))
             ->with(['latestSnapshot', 'historicalPeakEvidence', 'qualificationEvents', 'riskAssessment.signals'])
             ->get();
 

@@ -136,6 +136,30 @@
 > scheduled command. Sections **7, 13-H**, §10 issue **#4**, the schema tables
 > and the route list below describe the pre-removal state; `docs/monthly-rankings.md`
 > and `docs/historical-research-foundation.md` were deleted.
+>
+> **Update 2026-09-02 (7th — Post-30-Day Memecoin Tracking):** one new dashboard
+> section, **"📈 Post-30-Day Memecoins"**, added between Recently Crossed and the
+> footer (homepage is now **Header → 🔥 Recently Crossed $5M → 📈 Post-30-Day
+> Memecoins → footer**). It continues tracking memecoins that were previously
+> approved by the Recently Crossed flow once their pool ages past 30 days.
+> New: nullable `tokens.recently_crossed_qualified_at` (migration
+> `2026_08_28_000031`) — the persisted "previously approved" marker, stamped
+> ONCE and never cleared by the new `memecoins:mark-recently-crossed` command
+> (scheduled `7,17,27,…`, after `screen-risk`); `RecentlyCrossedApprovalMarker`;
+> `GET /api/memecoins/post-30-day` + `PostThirtyDayController`;
+> `Token::scopePostThirtyDayTracked` + `Token::scopeRecentlyCrossedListingCandidate`
+> (the latter extracted from `RecentlyCrossedController`, behaviour unchanged and
+> still covered by `RecentlyCrossedTest`); `PostThirtyDaySection.tsx`.
+> Membership = marker stamped AND `earliest_pair_created_at` age > 30d (exactly
+> 30d stays in Recently Crossed — the two lists never overlap). Historical
+> approval is preserved after a dump / stale discovery / a HIGH-risk rescreen;
+> current metrics + current risk are still shown. `?chain=` / `?sort=`
+> (market_cap / volume / peak_market_cap / age / liquidity / holders) /
+> `?direction=` (asc / desc). No new table, no re-discovery, no new
+> qualification system. Recently Crossed, risk screening, `GET /api/memecoins`,
+> discovery and every other scheduled command are unchanged. The scheduler now
+> has one more `memecoins:*` command and the API one more route than the counts
+> in §1 / §7 / the route list below.
 
 ---
 
