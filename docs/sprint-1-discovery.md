@@ -10,7 +10,7 @@ Background / API capability analysis: [dexscreener-reconnaissance.md](dexscreene
 ## Business rule
 
 > **Eligibility requires age ≤ 30 days AND a VERIFIED or OBSERVED market-cap
-> peak in `[$5M, $1B]`** (Step 19 — a bounded universe). The *qualifying peak*
+> peak in `[$5M, $1B)`** (Step 19 — a bounded universe). The *qualifying peak*
 > is the highest market cap we trust: `CURRENT_OBSERVATION` (our own DexScreener
 > snapshot saw MC ≥ $5M) or `HISTORICAL_VERIFIED` (CoinGecko verified historical
 > MC ≥ $5M).
@@ -232,7 +232,7 @@ The pipeline step `RECORD QUALIFICATION EVENTS` (after `QUALIFICATION`, before
 | `HISTORICAL_VERIFIED` | earliest CoinGecko verified `≥ $5M` point (`historical_peak_evidences.first_verified_crossing_at`, else `peak_observed_at`) — a *candled* "historically verified crossing", never an exact tick | `coingecko` |
 
 `HISTORICAL_ESTIMATE` and `UNKNOWN` produce **no** crossing event. Only tokens
-whose verified/observed peak sits in `[$5M, $1B]` get an event (same
+whose verified/observed peak sits in `[$5M, $1B)` get an event (same
 "qualified" definition as the main list). `(token_id, type)` is unique →
 repeated scheduler runs are idempotent and `crossed_at` is never rewritten. A
 token can hold both types; the **representative** crossing is the strongest
@@ -488,8 +488,9 @@ scheduler container: php artisan schedule:work
 > `App\Services\Trending\MarketIntegrityGate` and `config/trending.php`.
 > `GET /api/memecoins` + `MemecoinListController` + `MemecoinResource` were kept
 > (the tested market-cap + risk qualification contract — the UI just no longer
-> calls it). The `$5M–$200M` qualification band became `$5M–$1B` (inclusive
-> ceiling; `MEMECOIN_OBSERVED_PEAK_MAX_USD`).
+> calls it). The `$5M–$200M` qualification band became `$5M <= peak < $1B`
+> (`MEMECOIN_OBSERVED_PEAK_MAX_USD` = `1_000_000_000`, ceiling **exclusive** —
+> exactly $1B does not qualify; the $5M floor stays inclusive).
 
 ### Manual / debug scheduler commands
 
@@ -554,7 +555,7 @@ within `max_age_days` of now **AND** a **verified / observed market cap** has ev
 peaked **inside the `$5M`–`$1B` band** — via `observed_peak_market_cap >= $5M`
 (`CURRENT_OBSERVATION`) **or** `historical_peak_status = HISTORICAL_VERIFIED` with
 `historical_peak_value >= $5M`, **AND**
-`GREATEST(observed_peak_market_cap, historical_peak_value) ≤ $1B`.
+`GREATEST(observed_peak_market_cap, historical_peak_value) < $1B`.
 **`HISTORICAL_ESTIMATE` (FDV basis) and `UNKNOWN` are excluded** — an FDV estimate
 is not a market cap. A token whose verified/observed peak ever exceeded `$1B`
 is **excluded even if its current market cap has fallen back into the band** — we
@@ -634,7 +635,7 @@ Response:
 
 Read-only, **PostgreSQL only** — never DexScreener / CoinGecko / GeckoTerminal,
 never writes, never creates a crossing event. Returns currently-**qualified**
-tokens (age ≤ 30d, verified/observed peak in `[$5M, $1B]`) whose
+tokens (age ≤ 30d, verified/observed peak in `[$5M, $1B)`) whose
 **representative** crossing landed within the window (default 48h, `?hours=`
 1…168, optional `?chain=`), newest crossing first. A token with current MC
 **below `$5M`** still appears — it previously crossed. Rows carry `ACTIVE`
@@ -1184,7 +1185,7 @@ docker compose exec postgres createdb -U memecoin memecoin_test
 | `Services\DexScreener\DiscoveryResult` | `{ candidates, diagnostics, notQualifiedSample }`. |
 | `DTOs\DexScreener\TokenCandidateData` | Immutable normalized current observation. |
 | `DTOs\DexScreener\QualifiedCandidate` | `TokenCandidateData` + persisted peak figures → `toArray()` = the API item. |
-| `Services\Historical\QualificationEventRecorder` | Step 20 — upserts `qualification_events` rows for tokens whose evidence proves a verified/observed crossing in `[$5M, $1B]`. One batch pre-load query; idempotent. Pipeline-only. |
+| `Services\Historical\QualificationEventRecorder` | Step 20 — upserts `qualification_events` rows for tokens whose evidence proves a verified/observed crossing in `[$5M, $1B)`. One batch pre-load query; idempotent. Pipeline-only. |
 | `Http\Controllers\Api\RecentlyCrossedController` | Step 20 — `GET /api/memecoins/recently-crossed`. Read-only, PostgreSQL only. |
 | `Services\Narrative\NarrativeResearchService` | Step 21 — orchestrates one narrative run: collect sources (origin + popularity) via `NarrativeResearchProvider`s, rank + persist them, ask the `NarrativeExplanationProvider`, validate each section independently, persist the report. Cooldown / partial / provider-failure isolation. Command-only. |
 | `Services\Narrative\{TokenOriginResearchService,TokenPopularityResearchService,NarrativeSourceRanker,NarrativeEvidenceRecorder,NarrativeExplanationService,NarrativeExplanationValidator}` | Step 21 support — source collection, quality tiering, idempotent persistence, AI call + validation. |
@@ -1500,7 +1501,7 @@ snapshots_written                 MarketSnapshot rows appended this run
 persist_failed                    DB write failed for a candidate (logged, skipped)
 new_tokens / existing_tokens      Token rows created vs already present
 peak_updated                      observed_peak_market_cap raised this run
-qualified                         age ≤ 30d AND a verified/observed market cap peak in [$5M, $1B]
+qualified                         age ≤ 30d AND a verified/observed market cap peak in [$5M, $1B)
                                   (CURRENT_OBSERVATION or HISTORICAL_VERIFIED only)
 qualified_from_current_observation  qualified because THIS run's reading pushed the peak ≥ $5M
 not_qualified                     age-eligible but no verified/observed market cap peak in band
@@ -1639,7 +1640,7 @@ mocked (`Tests\Concerns\FakesDexScreener`) — no live calls.
   missing marketCap pre-filtered / missing pairCreatedAt pre-filtered / loose
   pair age > 35 d pre-filtered / **final age validation uses
   `earliest_pair_created_at` from enrichment, not the meta pair's `pairCreatedAt`**
-  / a peak in [$5M, $1B] qualifies / a current MC < $5M after an earlier in-band
+  / a peak in [$5M, $1B) qualifies / a current MC < $5M after an earlier in-band
   peak stays qualified / a `HISTORICAL_VERIFIED` peak in band qualifies with low
   current MC / a verified peak > $1B does NOT qualify even when current MC is
   back in band (`not_qualified_peak_above_ceiling` ≥ 1) / a `HISTORICAL_ESTIMATE`

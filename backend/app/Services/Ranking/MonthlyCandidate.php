@@ -11,7 +11,7 @@ use App\Models\Token;
  *
  *   eligible                  — a valid Top-3 candidate
  *   insufficient_observation  — real candidate but observed too sparsely
- *   ineligible                — failed an eligibility gate (age / $5M / $200M /
+ *   ineligible                — failed an eligibility gate (age / $5M / $1B /
  *                               no eligible snapshot / zero volume)
  *
  * The selection score is `performanceScore` = 100·Σ(w·strength)/Σ(w) over the

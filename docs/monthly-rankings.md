@@ -69,7 +69,7 @@ A token appears **at most once** per bucket.
 ## 2. Eligible universe (unchanged from Step 19)
 
 - age ≤ 30 days per in-month snapshot (`earliest_pair_created_at`, real pool age);
-- a **VERIFIED / OBSERVED** market-cap peak in `[$5M, $1B]`
+- a **VERIFIED / OBSERVED** market-cap peak in `[$5M, $1B)`
   (`CURRENT_OBSERVATION` or CoinGecko `HISTORICAL_VERIFIED`) — **`HISTORICAL_ESTIMATE`
   and `UNKNOWN` never qualify**, and `UNKNOWN` is never coerced to a number;
 - no in-month snapshot ever above $1B;

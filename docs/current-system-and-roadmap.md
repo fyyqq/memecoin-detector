@@ -103,7 +103,7 @@
 > calling it), `memecoins:discover` (minus the rollup), risk screening, token
 > detail pages (incl. risk data), Recently Crossed, Monthly Top Memecoins (incl.
 > its `Other` display bucket). The **market-cap qualification ceiling moved
-> $200M → $1B** (inclusive; the $5M floor is unchanged) via
+> $200M → $1B** (floor inclusive, $1B ceiling EXCLUSIVE) via
 > `dexscreener.filters.observed_peak_market_cap_max_usd` /
 > `MEMECOIN_OBSERVED_PEAK_MAX_USD`. The **header chain filter** dropped the
 > generic `Other` option and now lists real DexScreener chain ids (Solana /

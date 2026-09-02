@@ -37,7 +37,7 @@ class QualificationEventRecorder
 {
     /**
      * @param  list<array{token:Token,evidence:?HistoricalPeakEvidence}>  $entries
-     * @param  float|null  $ceiling  the $200M ceiling — a verified/observed peak
+     * @param  float|null  $ceiling  the market-cap ceiling — a verified/observed peak
      *                               above it is outside the tracked universe and
      *                               gets no crossing event (matches the main-list
      *                               "qualified" definition). Null = floor only.
@@ -48,7 +48,7 @@ class QualificationEventRecorder
         $stats = ['qualification_events_created' => 0, 'qualification_events_existing' => 0];
 
         // Only tokens whose evidence proves a VERIFIED / OBSERVED crossing that
-        // sits in the tracked [$5M, $200M] universe — the same "qualified"
+        // sits in the tracked [$5M, $1B) universe (ceiling exclusive) — the same "qualified"
         // definition the main list uses. Age is already enforced upstream (only
         // age-eligible tokens reach the recorder); an existing event for a token
         // that later ages out or dumps is never deleted.

@@ -155,7 +155,7 @@ class MemecoinResource extends JsonResource
 
         if ($this->observed_peak_market_cap !== null
             && $this->observed_peak_market_cap >= $min
-            && $this->observed_peak_market_cap <= $max) {
+            && $this->observed_peak_market_cap < $max) {
             return [
                 'status' => HistoricalPeakEvidence::STATUS_CURRENT_OBSERVATION,
                 'peak_value' => $this->observed_peak_market_cap,
@@ -171,7 +171,7 @@ class MemecoinResource extends JsonResource
         if ($this->historical_peak_status === HistoricalPeakEvidence::STATUS_HISTORICAL_VERIFIED
             && $this->historical_peak_value !== null
             && $this->historical_peak_value >= $min
-            && $this->historical_peak_value <= $max) {
+            && $this->historical_peak_value < $max) {
             return [
                 'status' => HistoricalPeakEvidence::STATUS_HISTORICAL_VERIFIED,
                 'peak_value' => $this->historical_peak_value,

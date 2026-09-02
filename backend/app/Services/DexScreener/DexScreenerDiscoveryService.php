@@ -35,7 +35,7 @@ use Throwable;
  * docs/trending-discovery-reconnaissance.md.
  *
  * A token qualifies for the main list when age <= 30 days AND a VERIFIED /
- * OBSERVED market-cap peak sits in [$5M, $1B] — proven by CURRENT_OBSERVATION
+ * OBSERVED market-cap peak sits in [$5M, $1B) — proven by CURRENT_OBSERVATION
  * (our own snapshot) or HISTORICAL_VERIFIED (CoinGecko). HISTORICAL_ESTIMATE
  * (FDV basis) and UNKNOWN do NOT qualify. A token whose CURRENT MC has dumped
  * below $5M STAYS qualified if an earlier observation / historical evidence

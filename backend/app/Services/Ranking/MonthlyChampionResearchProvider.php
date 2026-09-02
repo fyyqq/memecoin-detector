@@ -14,7 +14,7 @@ namespace App\Services\Ranking;
  *  - never scrape search-engine result pages;
  *  - resolve entity identity by NAME + SYMBOL + CHAIN (+ contract address where
  *    reliably identifiable) — never by symbol alone;
- *  - report MARKET CAP, never FDV, for the $5M–$200M check;
+ *  - report MARKET CAP, never FDV, for the $5M–$1B check (ceiling exclusive);
  *  - never claim "DexScreener #1" unless a source actually establishes it
  *    (use `MonthlyRanking::SOURCE_EXACT_DEXSCREENER_RANK` only then).
  *

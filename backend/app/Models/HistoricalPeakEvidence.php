@@ -102,7 +102,9 @@ class HistoricalPeakEvidence extends Model
      * Does this evidence qualify the token for the main bounded market-cap
      * universe? True only for a VERIFIED / OBSERVED market cap
      * (CURRENT_OBSERVATION or HISTORICAL_VERIFIED) whose peak sits in
-     * `[$min, $max]`. An FDV-basis estimate never qualifies.
+     * `[$min, $max)` — the floor is INCLUSIVE (peak >= $5M), the ceiling is
+     * EXCLUSIVE (peak < $1B; exactly $1B does NOT qualify). An FDV-basis
+     * estimate never qualifies.
      *
      * `$max` defaults to null (no ceiling) so existing single-argument callers
      * keep the old "peak >= floor" behaviour.
@@ -117,20 +119,20 @@ class HistoricalPeakEvidence extends Model
             return false;
         }
 
-        return $max === null || $this->peak_value_usd <= $max;
+        return $max === null || $this->peak_value_usd < $max;
     }
 
     /**
      * A verified/observed market cap that cleared the floor but whose peak
-     * exceeds the ceiling — i.e. it qualified once but is now outside the
-     * requested $5M–$1B universe.
+     * reached or exceeded the (exclusive) ceiling — i.e. it qualified once but
+     * is now outside the requested `[$5M, $1B)` universe.
      */
     public function peakAboveCeiling(float $min, float $max): bool
     {
         return in_array($this->status, self::QUALIFYING_STATUSES, true)
             && $this->peak_value_usd !== null
             && $this->peak_value_usd >= $min
-            && $this->peak_value_usd > $max;
+            && $this->peak_value_usd >= $max;
     }
 
     /**

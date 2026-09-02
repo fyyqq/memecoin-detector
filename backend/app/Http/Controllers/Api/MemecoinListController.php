@@ -23,7 +23,7 @@ class MemecoinListController extends Controller
      *
      * A row appears here only when it is BOTH:
      *   1. market-cap qualified (Step 19 — age <= max_age_days AND a
-     *      VERIFIED / OBSERVED peak in [$5M, $1B]; HISTORICAL_ESTIMATE and
+     *      VERIFIED / OBSERVED peak in [$5M, $1B); HISTORICAL_ESTIMATE and
      *      UNKNOWN never qualify); AND
      *   2. it passes the Step 24 risk screen — mature enough
      *      (>= MEMECOIN_MAIN_MIN_AGE_HOURS), risk_level in {LOWER, MEDIUM},

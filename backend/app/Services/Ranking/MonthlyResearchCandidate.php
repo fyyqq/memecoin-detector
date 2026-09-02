@@ -13,7 +13,7 @@ use Carbon\CarbonImmutable;
  *
  * Providers NEVER fabricate: every candidate must be identity-resolvable
  * (name + symbol + chain, ideally a contract address) and carry the sources
- * that support it. The service re-validates eligibility ($5M–$200M MARKET CAP —
+ * that support it. The service re-validates eligibility ($5M–$1B MARKET CAP —
  * never FDV, the right bucket, the right month, ≤ 30-day trading age) and ranks
  * survivors with the deterministic participation formula
  * ({@see MonthlyPerformanceCalculator::scoreHistorical}).
@@ -96,12 +96,15 @@ final class MonthlyResearchCandidate
         return mb_strtolower(trim($this->chainId)).':'.mb_strtolower(trim((string) $this->tokenAddress)).':'.mb_strtolower(trim($this->symbol));
     }
 
-    /** Peak market cap is present AND inside the $5M–$200M band. */
+    /**
+     * Peak market cap is present AND inside the qualification band `[$min, $max)`
+     * — floor inclusive, ceiling EXCLUSIVE (exactly $max does not qualify).
+     */
     public function peakInBand(float $min, float $max): bool
     {
         return $this->peakMarketCap !== null
             && $this->peakMarketCap >= $min
-            && $this->peakMarketCap <= $max;
+            && $this->peakMarketCap < $max;
     }
 
     public function canComputeGrowth(): bool

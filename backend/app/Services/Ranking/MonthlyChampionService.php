@@ -330,7 +330,7 @@ class MonthlyChampionService
                     });
             })
             ->whereRaw(
-                'GREATEST(COALESCE(observed_peak_market_cap, 0), COALESCE(historical_peak_value, 0)) <= ?',
+                'GREATEST(COALESCE(observed_peak_market_cap, 0), COALESCE(historical_peak_value, 0)) < ?',
                 [$max],
             )
             ->whereHas('marketSnapshots', fn (Builder $q) => $q->whereBetween('observed_at', [$window->start, $endInclusive]))

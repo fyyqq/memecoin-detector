@@ -19,10 +19,11 @@ use Illuminate\Http\Request;
  * GeckoTerminal, never writes, never runs discovery, never creates a
  * QualificationEvent.
  *
- * Returns currently-qualified tokens (age <= 30d AND a verified/observed peak in
- * [$5M, $200M]) whose REPRESENTATIVE "$5M crossing" (HISTORICAL_VERIFIED over
- * CURRENT_OBSERVATION) happened within the window (default 48h, `?hours=` up to
- * a safe max of 168). Newest crossing first.
+ * Returns currently-qualified tokens: age <= 30d AND a verified/observed peak
+ * `$5M <= peak < $1B` (floor inclusive, ceiling EXCLUSIVE) whose REPRESENTATIVE
+ * "$5M crossing" (HISTORICAL_VERIFIED over CURRENT_OBSERVATION) happened within
+ * the window (default 48h, `?hours=` up to a safe max of 168). Newest crossing
+ * first.
  *
  * A token whose current MC is now BELOW $5M can still appear — the floor is a
  * peak rule and this endpoint is about the crossing, not the current price.
@@ -60,7 +61,7 @@ class RecentlyCrossedController extends Controller
                     });
             })
             ->whereRaw(
-                'GREATEST(COALESCE(observed_peak_market_cap, 0), COALESCE(historical_peak_value, 0)) <= ?',
+                'GREATEST(COALESCE(observed_peak_market_cap, 0), COALESCE(historical_peak_value, 0)) < ?',
                 [$peakMax],
             )
             ->when($chain, fn ($query) => $query->where('chain_id', $chain))
@@ -139,7 +140,7 @@ class RecentlyCrossedController extends Controller
 
         if ($token->observed_peak_market_cap !== null
             && $token->observed_peak_market_cap >= $min
-            && $token->observed_peak_market_cap <= $max) {
+            && $token->observed_peak_market_cap < $max) {
             return $token->observed_peak_market_cap;
         }
 

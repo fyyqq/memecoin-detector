@@ -110,17 +110,19 @@ return [
     | Sprint 1 eligibility (Step 19 — bounded market-cap universe):
     |
     |   age <= max_age_days
-    |   AND $5M <= qualifying_peak <= $1B
+    |   AND $5M <= qualifying_peak < $1B
     |
     | where qualifying_peak is the highest VERIFIED / OBSERVED market cap we trust
     | (CURRENT_OBSERVATION or HISTORICAL_VERIFIED). A token that ONCE printed a
-    | peak above the ceiling is excluded even if its current MC is far lower. A
-    | token whose CURRENT MC has dumped below the floor STAYS qualified if it
-    | already cleared the floor via an earlier observation / historical evidence
-    | — the lower bound is a peak rule, not a current-MC rule.
+    | peak at or above the ceiling is excluded even if its current MC is far
+    | lower. A token whose CURRENT MC has dumped below the floor STAYS qualified
+    | if it already cleared the floor via an earlier observation / historical
+    | evidence — the lower bound is a peak rule, not a current-MC rule.
     |
-    | The ceiling is inclusive (peak <= ceiling), matching every boundary in the
-    | codebase. HISTORICAL_ESTIMATE (FDV basis) never qualifies.
+    | The floor is INCLUSIVE (peak >= $5M qualifies) and the ceiling is EXCLUSIVE
+    | (peak < $1B; a peak of exactly $1B does NOT qualify). The configured value
+    | stays 1_000_000_000 — the exclusivity is in the `<` comparison at the
+    | qualification sites. HISTORICAL_ESTIMATE (FDV basis) never qualifies.
     */
     'filters' => [
         'observed_peak_market_cap_min_usd' => (int) env('MEMECOIN_OBSERVED_PEAK_MIN_USD', 5_000_000),

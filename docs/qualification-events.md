@@ -111,7 +111,7 @@ historical-qualification step:
 `App\Services\Historical\QualificationEventRecorder::recordBatch()`:
 
 1. keeps only entries whose evidence `qualifies($5M, $1B)` — same "qualified"
-   definition the main list uses (a verified/observed peak **above `$1B`** gets
+   definition the main list uses (a verified/observed peak **at or above `$1B`** gets
    no event; age is already enforced upstream);
 2. one query loads every existing event for the batch (`token_id → type`);
 3. for each token missing its matching-type row, creates it (one indexed
@@ -197,7 +197,7 @@ never writes, never creates an event.
 
 - default window 48h; `?hours=` (1 … 168); optional `?chain=`.
 - returns currently-**qualified** tokens (age ≤ 30d, verified/observed peak in
-  `[$5M, $1B]`) whose **representative** crossing is inside the window.
+  `[$5M, $1B)`) whose **representative** crossing is inside the window.
 - a token with current MC **below `$5M`** still appears — it previously crossed.
 - newest crossing first.
 

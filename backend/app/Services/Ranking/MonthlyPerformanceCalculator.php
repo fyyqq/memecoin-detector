@@ -75,7 +75,7 @@ class MonthlyPerformanceCalculator
         );
 
         // 1. Token belongs to the eligible universe (Step 19): a VERIFIED /
-        //    OBSERVED market-cap peak in [$5M, $1B]. HISTORICAL_ESTIMATE and
+        //    OBSERVED market-cap peak in [$5M, $1B). HISTORICAL_ESTIMATE and
         //    UNKNOWN never qualify.
         if ($token->earliest_pair_created_at === null) {
             return $ineligible('no_pool_creation_timestamp');
@@ -84,12 +84,13 @@ class MonthlyPerformanceCalculator
             return $ineligible('token_not_in_market_cap_universe');
         }
 
-        // 2. A token that exceeded the $1B ceiling AT ANY POINT in the month is out.
+        // 2. A token that reached or exceeded the (exclusive) $1B ceiling AT ANY
+        //    POINT in the month is out.
         $anyAboveCeiling = $monthSnapshots->contains(
-            fn (MarketSnapshot $s): bool => $s->market_cap !== null && $s->market_cap > $max,
+            fn (MarketSnapshot $s): bool => $s->market_cap !== null && $s->market_cap >= $max,
         );
         if ($anyAboveCeiling) {
-            return $ineligible('exceeded_200m_ceiling_in_month');
+            return $ineligible('reached_market_cap_ceiling_in_month');
         }
 
         // 3. Eligible snapshots for this month: real MC in band, age <= 30d,
@@ -98,7 +99,7 @@ class MonthlyPerformanceCalculator
         $eligible = $monthSnapshots
             ->filter(fn (MarketSnapshot $s): bool => $s->market_cap !== null
                 && $s->market_cap > 0.0
-                && $s->market_cap <= $max
+                && $s->market_cap < $max
                 && $s->observed_at !== null
                 && $s->observed_at->lessThanOrEqualTo($ageCutoff)
                 && ($s->volume_h24 ?? 0.0) > 0.0
@@ -307,7 +308,7 @@ class MonthlyPerformanceCalculator
         $viaEvidence = $evidence !== null && $evidence->qualifies($min, $max);
         $viaObserved = $token->observed_peak_market_cap !== null
             && $token->observed_peak_market_cap >= $min
-            && $token->observed_peak_market_cap <= $max;
+            && $token->observed_peak_market_cap < $max;
 
         if (! $viaEvidence && ! $viaObserved) {
             return false;
@@ -324,7 +325,7 @@ class MonthlyPerformanceCalculator
             return false;
         }
 
-        return $greatestPeak <= $max;
+        return $greatestPeak < $max;
     }
 
     /**

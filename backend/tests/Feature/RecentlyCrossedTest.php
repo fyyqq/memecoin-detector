@@ -264,20 +264,21 @@ class RecentlyCrossedTest extends TestCase
     }
 
     /**
-     * The qualification ceiling was raised from $200M to $1B (inclusive) in the
-     * dashboard-simplification pass. The $5M floor is unchanged.
+     * The qualification band is `$5,000,000 <= peak < $1,000,000,000` — the
+     * floor is INCLUSIVE and the upper bound is EXCLUSIVE: a peak of exactly
+     * $1B does NOT qualify. The $5M floor is unchanged.
      */
     #[Test]
-    public function the_market_cap_qualification_band_is_five_million_to_one_billion(): void
+    public function the_market_cap_band_floor_is_inclusive_and_the_one_billion_ceiling_is_exclusive(): void
     {
         $cases = [
-            ['SUB5M', 4_990_000.0, false],
+            ['UNDER5M', 4_999_999.0, false],
             ['AT5M', 5_000_000.0, true],
             ['AT200M', 200_000_000.0, true],
             ['AT500M', 500_000_000.0, true],
-            ['AT999M', 999_000_000.0, true],
-            ['AT1B', 1_000_000_000.0, true],   // inclusive ceiling
-            ['OVER1B', 1_250_000_000.0, false],
+            ['UNDER1B', 999_999_999.0, true],
+            ['AT1B', 1_000_000_000.0, false],   // exclusive ceiling — exactly $1B is OUT
+            ['OVER1B', 1_000_000_001.0, false],
         ];
 
         foreach ($cases as [$symbol, $peak, $_]) {

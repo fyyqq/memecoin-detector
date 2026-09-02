@@ -15,7 +15,7 @@ use Illuminate\Support\Facades\Log;
  * There is NO official documented DexScreener API endpoint for a historical
  * monthly Trending leaderboard, and search-engine result pages must not be
  * scraped. Automated internet research that resolves a small memecoin's
- * identity + $5M–$200M MARKET CAP + ≤ 30-day trading age for a specific past
+ * identity + $5M–$1B MARKET CAP + ≤ 30-day trading age for a specific past
  * month is not reliably possible from any free API. So this provider is a
  * documented extension point that is **OFF by default** and returns `[]` — the
  * actual historical research flows through the curated

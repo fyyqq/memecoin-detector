@@ -77,8 +77,9 @@ class Token extends Model
     /**
      * The Step 19 market-cap qualification predicate, shared by the read APIs
      * and the risk screener: age <= max_age_days AND a VERIFIED / OBSERVED peak
-     * in [$5M, $1B]. HISTORICAL_ESTIMATE (FDV basis) and UNKNOWN never
-     * qualify. Risk screening layers ON TOP of this — it never changes it.
+     * in [$5M, $1B) — floor inclusive, ceiling EXCLUSIVE (exactly $1B does not
+     * qualify). HISTORICAL_ESTIMATE (FDV basis) and UNKNOWN never qualify. Risk
+     * screening layers ON TOP of this — it never changes it.
      *
      * @param  Builder<Token>  $query
      */
@@ -99,7 +100,7 @@ class Token extends Model
                     });
             })
             ->whereRaw(
-                'GREATEST(COALESCE(observed_peak_market_cap, 0), COALESCE(historical_peak_value, 0)) <= ?',
+                'GREATEST(COALESCE(observed_peak_market_cap, 0), COALESCE(historical_peak_value, 0)) < ?',
                 [$peakMax],
             );
     }

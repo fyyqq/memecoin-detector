@@ -5,7 +5,7 @@ market-cap qualification. It gates the MAIN LIST:
 
 ```
 MARKET-CAP QUALIFICATION  (Step 19 — unchanged)
-        │  age ≤ 30d · verified/observed peak in [$5M, $1B] · volume>0 · liquidity>0
+        │  age ≤ 30d · verified/observed peak in [$5M, $1B) · volume>0 · liquidity>0
         ▼
 RISK SCREENING  (this step — memecoins:screen-risk)
         ▼
